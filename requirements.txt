@@ -1,17 +1,22 @@
-# Core Twitch stream recording
+# Stream recording (Twitch and Kick)
 streamlink>=6.7.0
 
 # Local speech-to-text transcription (.srt generation)
 openai-whisper>=20231117
 
-# Underlying PyTorch & audio/video dependencies (explicitly pinned for stability)
+# Local face detection for the vertical layout
+opencv-python-headless>=5.0
+
+# YouTube Shorts upload (only used with --upload)
+google-auth-oauthlib>=1.2.0
+
+# Underlying PyTorch & audio/video dependencies
 torch>=2.1.0
 torchaudio>=2.1.0
-numpy>=1.24.0,<2.0.0
+numpy>=1.24.0
 tqdm>=4.65.0
 more-itertools>=10.0.0
 tiktoken>=0.5.0
 
 # Optional bundled FFmpeg binary fallback if system FFmpeg isn't in PATH
 imageio-ffmpeg>=0.4.9
-

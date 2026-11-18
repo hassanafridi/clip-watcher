@@ -1,143 +1,99 @@
-# 🎬 clip-watcher
+# clip-watcher
 
-An automated Twitch stream hype-detector, clip creator, and subtitle generator.
+Records a live Twitch or Kick stream, watches chat, and cuts a vertical clip with subtitles every time chat spikes. Optionally uploads each clip to YouTube Shorts. Everything except that upload runs on your own machine.
 
-`clip-watcher` listens to Twitch chat activity in real-time. When a chat message spike occurs (e.g., laughter, hype, clutch plays), it automatically cuts a 30-second video clip, crops it into **9:16 vertical video** (ideal for TikTok, YouTube Shorts, and Instagram Reels), and generates synchronized subtitle files (`.srt`) using **OpenAI Whisper**.
+## Install
 
----
+Linux and macOS:
 
-## ✨ Features
+    chmod +x setup.sh watch.sh
+    ./setup.sh
 
-- **Real-Time Hype Detection**: Connects anonymously to Twitch IRC over SSL (port 443) to monitor message velocity in 10-second buckets against a dynamic rolling median (2.5x threshold).
-- **Auto-Recording**: Captures live stream audio/video in source quality via `streamlink` (with ad-skipping enabled).
-- **Vertical Video Formatting**: Automatically crops 16:9 widescreen video to **9:16 vertical video** (`crop=ih*9/16:ih`) using `ffmpeg`.
-- **AI Speech-to-Text Transcription**: Generates subtitle files (`.srt`) for every cut clip via local OpenAI Whisper models.
-- **Cross-Platform**: Ready-to-use setup and launch scripts for **Linux**, **macOS**, and **Windows**.
+Windows:
 
----
+    setup.bat
 
-## 📁 Project Structure
+Both install ffmpeg, create a virtual environment in `venv/`, and install `requirements.txt`. To do it by hand you need Python 3.10+, ffmpeg on PATH, and `pip install -r requirements.txt`.
 
-```text
-clip-watcher/
-├── watcher.py          # Core watcher, chat monitor, clip cutter & Whisper worker
-├── requirements.txt    # Python dependencies (Streamlink, Whisper, PyTorch, etc.)
-├── setup.sh            # 1-click installer for Linux & macOS
-├── watch.sh            # Launcher script for Linux & macOS
-├── setup.bat           # 1-click installer for Windows PC (winget + venv)
-├── watch.bat           # Launcher script for Windows PC
-├── rec/                # Raw stream recordings (.ts) [git-ignored]
-└── clips/              # Output 9:16 video clips (.mp4) and subtitles (.srt) [git-ignored]
-```
+## Use
 
----
+Settings page in your browser:
 
-## 🚀 Quick Start
+    ./watch.sh          (Windows: watch.bat)
 
-### Linux & macOS
+It opens a page served from this machine only. Every setting is on it, with a live preview of the clip layout, start and stop buttons, the log, and presets you can save and load. Keep the terminal window open while you use it.
 
-1. **Run Setup** (Installs `ffmpeg` via system package manager, creates `venv`, installs Python dependencies):
-   ```bash
-   chmod +x setup.sh watch.sh
-   ./setup.sh
-   ```
+Terminal:
 
-2. **Start Watching a Channel**:
-   ```bash
-   ./watch.sh <twitch_channel>
-   ```
+    ./watch.sh <channel>                 # Twitch
+    ./watch.sh <channel> --kick          # Kick
+    ./watch.sh <channel> --min 5         # quiet chat
+    ./watch.sh <channel> --upload        # also upload each clip (private)
+    ./watch.sh <channel> @square.txt     # settings from a preset file
 
----
+The stream is recorded to `rec/`. Clips (`.mp4`) and subtitles (`.srt`) land in `clips/`. It runs until the stream ends or you stop it.
 
-### Windows (Command Prompt / PowerShell)
+A spike is a 10 second chat bucket with at least `--min` messages and at least 2.5x the median of the last 3 minutes, so the first clip can come no sooner than 3 minutes in. The clip covers 20 seconds before the spike was detected and 10 seconds after. Spikes within one clip length of the last clip are skipped so clips do not overlap.
 
-1. **Run Setup** (Installs `ffmpeg` via `winget`, creates `venv`, installs Python dependencies):
-   ```cmd
-   setup.bat
-   ```
+## Options
 
-2. **Start Watching a Channel**:
-   ```cmd
-   watch.bat <twitch_channel>
-   ```
+`./watch.sh --help` lists every option with its default. The settings page shows the same list.
 
----
+| Option | Default | What it changes |
+| --- | --- | --- |
+| `--kick` | off | the channel is on Kick, not Twitch |
+| `--quality` | best | stream quality to record, e.g. `720p60` |
+| `--min` | 15 | fewest messages per bucket that count as a spike |
+| `--factor` | 2.5 | spike = this many times the median bucket |
+| `--bucket` | 10 | seconds of chat per bucket |
+| `--window` | 180 | seconds of history the median is taken over |
+| `--before`, `--after` | 20, 10 | clip length: seconds before and after the spike |
+| `--cooldown` | clip length | seconds between clips |
+| `--ratio` | 9:16 | aspect ratio, e.g. `1:1`, `4:5`, `16:9` |
+| `--height` | 1920 | clip height in pixels; the width follows from the ratio |
+| `--crf` | 23 | video quality, lower is better and bigger |
+| `--cam` | top | facecam panel on `top`, at the `bottom`, or `off` |
+| `--face-share` | 0.33 | share of the clip height the facecam panel gets |
+| `--face-zoom` | 4 | how tight the facecam crop is, in face widths |
+| `--big-face` | 0.12 | a face wider than this share of the frame fills the clip instead |
+| `--model`, `--language` | base, detect | Whisper model and subtitle language |
+| `--upload`, `--privacy` | off, private | YouTube Shorts upload |
+| `--title`, `--description` | `{text} \| {channel}`, `{text}` | upload title and description templates |
 
-## ⚙️ Usage & CLI Options
+A preset is a text file with one option per line in `--name=value` form. Save one from the settings page or write it by hand, then load it with `@`.
 
-You can invoke `watch.sh`, `watch.bat`, or `python watcher.py` directly with custom parameters:
+## Clip layout
 
-```bash
-python watcher.py <channel> [--min MIN_MESSAGES] [--model WHISPER_MODEL]
-```
+A face detector looks for the streamer in each clip:
 
-### Options:
+- small facecam on a game: the facecam is zoomed in on its own panel, the game is centre-cropped in the rest
+- streamer fills the frame: one crop centred on the face
+- no face found, `--cam off`, or a landscape ratio: plain centre crop
 
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `channel` | `string` | *(required)* | Twitch channel username (e.g. `gorgc`, `shroud`, `tarik`). |
-| `--min` | `int` | `15` | Minimum number of messages in a 10-second window required to qualify as a spike. |
-| `--model` | `string` | `base` | Whisper model size: `tiny`, `base`, `small`, `medium`, `large`. Use `tiny` for faster generation on low-end hardware. |
+## YouTube setup (once)
 
-### Examples:
+1. In Google Cloud Console create a project and enable "YouTube Data API v3".
+2. Create an OAuth client of type "Desktop app", download it, and save it as `client_secret.json` next to `upload.py`.
+3. Run with `--upload`. A browser opens once for consent; the login is kept in `token.json`.
 
-- **Monitor with higher hype threshold for busy chats:**
-  ```bash
-  ./watch.sh xqc --min 40
-  ```
+Keep `client_secret.json` and `token.json` private (both are git-ignored). Google may hold uploads from API projects it has not audited as private no matter what `--privacy` says, and logins of projects in "Testing" status expire after a few days (delete `token.json` and sign in again).
 
-- **Use a lighter transcription model for faster processing:**
-  ```bash
-  ./watch.sh shroud --min 20 --model tiny
-  ```
+Titles and descriptions are filled in from templates, with no outside service involved. `{text}` is what was said in the clip (its first words in the title) and `{channel}` is the channel name:
 
-- **Run directly on Windows:**
-  ```cmd
-  watch.bat tarik --min 25 --model base
-  ```
+    ./watch.sh <channel> --upload --title "{channel}: {text}" --description "{text} #gaming"
 
----
+Every description also credits the source channel.
 
-## 🧠 How It Works
+To upload a clip by hand:
 
-1. **Stream Capture**: Launches `streamlink` in the background to record the stream into `rec/<channel>_<timestamp>.ts`.
-2. **Chat Sampling**: Groups incoming chat messages into 10-second windows and keeps a rolling 3-minute history (18 buckets).
-3. **Spike Trigger**: A hype moment is triggered when:
-   $$\text{Messages} \ge \max(\text{min\_messages}, 2.5 \times \text{median})$$
-   A 30-second cooldown prevents duplicate clips for the same event.
-4. **Video Clipping**: Extracts 30 seconds (-20s before the spike up to +10s after) and crops to 9:16 aspect ratio:
-   ```text
-   clips/<channel>_<HHMMSS>.mp4
-   ```
-5. **Transcription**: Runs Whisper on the clipped video to produce:
-   ```text
-   clips/<channel>_<HHMMSS>.srt
-   ```
+    python upload.py clips/<file>.mp4 twitch.tv/<channel> --privacy unlisted
 
----
+## Notes
 
-## 🛠️ Manual Installation (Optional)
-
-If you prefer setting up manually without `setup.sh` or `setup.bat`:
-
-1. Ensure **`ffmpeg`** is installed and in your system `PATH`:
-   - **Ubuntu/Debian**: `sudo apt install ffmpeg`
-   - **macOS**: `brew install ffmpeg`
-   - **Windows**: `winget install Gyan.FFmpeg`
-2. Create and activate a Python virtual environment:
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-3. Install dependencies:
-   ```bash
-   pip install --upgrade pip
-   pip install -r requirements.txt
-   ```
-
----
-
-## 📄 License
-
-MIT
-
+- It only works while the channel is live.
+- Clip streamers who allow it.
+- The subtitles (Whisper) and the face detector are small models that run locally; nothing is sent anywhere.
+- Twitch chat is read anonymously over TLS on port 443.
+- Kick chat is polled from the public message history every 2 seconds. That sees at most 25 new messages per poll, so spikes in very fast chats flatten out.
+- The settings page only answers requests from this machine that carry the secret in the link `gui.py` prints.
+- `python test_watch.py` runs the self-check.

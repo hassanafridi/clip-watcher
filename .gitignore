@@ -2,4 +2,8 @@ venv/
 rec/
 clips/
 slips/
-
+__pycache__/
+client_secret.json
+token.json
+last_session.txt
+*.onnx

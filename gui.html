@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>clip-watcher</title>
+<link rel="icon" href="data:,">
+<style>
+:root {
+  --bay: #eef1f4; --panel: #ffffff; --ink: #18212b; --muted: #5c6b7a; --line: #d5dbe2;
+  --tally: #d7263d; --cam: #1f7a8c; --on-cam: #ffffff; --game: #c9d2dc;
+  --display: "Bahnschrift", "DIN Alternate", "Roboto Condensed", "Arial Narrow", system-ui, sans-serif;
+  --body: system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, Consolas, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bay: #12171d; --panel: #1a2129; --ink: #e7ecf1; --muted: #94a3b3; --line: #2b3540;
+    --tally: #ff5468; --cam: #4fb3c6; --on-cam: #12171d; --game: #33404d;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bay); color: var(--ink); font: 15px/1.5 var(--body); }
+h1, h2 { font-family: var(--display); font-weight: 600; margin: 0; }
+h1 { font-size: 22px; letter-spacing: 0.02em; }
+h2 { font-size: 17px; letter-spacing: 0.01em; margin-bottom: 12px; }
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--cam); outline-offset: 2px; }
+
+.bar {
+  position: sticky; top: 0; z-index: 2; background: var(--panel); border-bottom: 1px solid var(--line);
+  padding: 12px 24px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px;
+}
+.bar label { color: var(--muted); }
+.bar .channel { display: flex; align-items: center; gap: 8px; flex: 1 1 260px; max-width: 420px; }
+.bar .channel input { flex: 1; min-width: 0; }
+.status { display: flex; align-items: center; gap: 8px; margin-left: auto; min-height: 36px; }
+.dot { width: 12px; height: 12px; border-radius: 50%; background: var(--line); flex: none; }
+.running .dot { background: var(--tally); animation: tally 1.6s ease-in-out infinite; }
+@keyframes tally { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .running .dot { animation: none; } }
+.notice { flex-basis: 100%; margin: 0; color: var(--tally); font-weight: 600; }
+.notice:empty { display: none; }
+
+input[type="text"], select {
+  height: 36px; padding: 0 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; width: 100%;
+}
+input[type="checkbox"] { width: 18px; height: 18px; margin: 0; accent-color: var(--cam); }
+button {
+  height: 36px; padding: 0 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); cursor: pointer;
+}
+button:disabled { opacity: 0.45; cursor: default; }
+button.go { background: var(--ink); border-color: var(--ink); color: var(--bay); font-weight: 600; }
+button.halt { border-color: var(--tally); color: var(--tally); font-weight: 600; }
+.running button.halt:not(:disabled) { background: var(--tally); color: var(--panel); }
+
+main {
+  max-width: 1180px; margin: 0 auto; padding: 24px;
+  display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 32px; align-items: start;
+}
+.settings section { padding: 20px 0; border-top: 1px solid var(--line); }
+.settings section:first-of-type { border-top: 0; padding-top: 0; }
+.tools { display: flex; flex-wrap: wrap; gap: 8px; padding-bottom: 20px; }
+.fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 16px 24px; }
+.field label { display: block; font-weight: 600; margin-bottom: 4px; }
+.field.check label { display: flex; align-items: center; gap: 8px; min-height: 36px; margin: 0; }
+.help { margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 1.4; }
+
+aside { position: sticky; top: 84px; display: grid; gap: 24px; }
+.stage { display: flex; gap: 16px; align-items: center; }
+.frame {
+  flex: none; display: flex; flex-direction: column; overflow: hidden;
+  border: 2px solid var(--ink); border-radius: 8px; background: var(--game);
+}
+.frame div { display: flex; align-items: center; justify-content: center; font-size: 12px; text-align: center; padding: 2px; }
+.frame .cam { background: var(--cam); color: var(--on-cam); font-weight: 600; }
+.caption { margin: 0; color: var(--muted); font-size: 13px; }
+.caption strong { display: block; color: var(--ink); font: 600 17px var(--display); }
+#log {
+  margin: 0; height: 340px; overflow: auto; padding: 10px 12px; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 6px; font: 12.5px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word;
+}
+#log:empty::before { content: "Nothing yet. Enter a channel and start watching."; color: var(--muted); font-family: var(--body); }
+
+@media (max-width: 860px) {
+  main { grid-template-columns: minmax(0, 1fr); padding: 16px; }
+  aside { position: static; }
+  .bar { padding: 12px 16px; position: static; }
+  .status { margin-left: 0; }
+  #log { height: 260px; }
+}
+</style>
+</head>
+<body>
+<header class="bar" id="bar">
+  <h1>clip-watcher</h1>
+  <div class="channel">
+    <label for="channel">Channel</label>
+    <input type="text" id="channel" autocomplete="off" spellcheck="false" placeholder="channel name">
+  </div>
+  <button class="go" id="start">Start watching</button>
+  <button class="halt" id="stop" disabled>Stop</button>
+  <div class="status" role="status"><span class="dot"></span><span id="status">Not running</span></div>
+  <p class="notice" id="notice" role="alert"></p>
+</header>
+<main>
+  <div class="settings">
+    <div class="tools">
+      <button id="save">Save preset</button>
+      <button id="load">Load preset</button>
+      <button id="reset">Reset to defaults</button>
+      <button id="clips">Open clips folder</button>
+      <input type="file" id="file" accept=".txt,text/plain" hidden>
+    </div>
+    <div id="form"></div>
+  </div>
+  <aside>
+    <section>
+      <h2>Clip layout</h2>
+      <div class="stage">
+        <div class="frame" id="frame" aria-hidden="true"></div>
+        <p class="caption" id="caption"></p>
+      </div>
+    </section>
+    <section>
+      <h2>Log</h2>
+      <pre id="log" role="log" aria-live="polite" tabindex="0"></pre>
+    </section>
+  </aside>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const token = new URLSearchParams(location.search).get("t") || "";
+const fields = {};
+let next = 0;
+
+async function api(path, body) {
+  const response = await fetch(path, {
+    method: body ? "POST" : "GET",
+    headers: body ? {"X-Token": token, "Content-Type": "application/json"} : {"X-Token": token},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || response.statusText);
+  return data;
+}
+
+function el(tag, props, ...children) {
+  const node = Object.assign(document.createElement(tag), props);
+  node.append(...children);
+  return node;
+}
+
+function build(groups) {
+  for (const group of groups) {
+    const grid = el("div", {className: "fields"});
+    for (const opt of group.options) {
+      const id = "o" + opt.flag, helpId = "h" + opt.flag;
+      const name = opt.flag.slice(2).replace(/-/g, " ");
+      const label = name[0].toUpperCase() + name.slice(1);
+      let input, field;
+      if (opt.kind === "bool") {
+        input = el("input", {type: "checkbox", id});
+        field = el("div", {className: "field check"}, el("label", {}, input, label));
+      } else {
+        input = opt.kind === "choice"
+          ? el("select", {id}, ...opt.choices.map(c => el("option", {value: c}, c)))
+          : el("input", {type: "text", id, autocomplete: "off", spellcheck: false});
+        field = el("div", {className: "field"}, el("label", {htmlFor: id}, label), input);
+      }
+      input.setAttribute("aria-describedby", helpId);
+      input.addEventListener("input", preview);
+      field.append(el("p", {className: "help", id: helpId}, opt.help));
+      grid.append(field);
+      fields[opt.flag] = {opt, input};
+    }
+    const title = group.title[0].toUpperCase() + group.title.slice(1);
+    $("form").append(el("section", {}, el("h2", {}, title), grid));
+  }
+}
+
+const read = flag => {
+  const {opt, input} = fields[flag];
+  return opt.kind === "bool" ? input.checked : input.value.trim();
+};
+function write(flag, value) {
+  const {opt, input} = fields[flag];
+  if (opt.kind === "bool") input.checked = Boolean(value); else input.value = value;
+}
+function reset() {
+  for (const flag in fields) write(flag, fields[flag].opt.kind === "bool" ? false : fields[flag].opt.default);
+  preview();
+}
+// settings left at their default are omitted, so a preset only holds what was changed
+function args() {
+  const out = [];
+  for (const flag in fields) {
+    const value = read(flag);
+    if (value === true) out.push(flag);
+    else if (value !== false && value !== "" && value !== String(fields[flag].opt.default)) out.push(flag + "=" + value);
+  }
+  return out;
+}
+function apply(lines, keepChannel) {
+  reset();
+  for (const line of lines.map(l => l.trim()).filter(Boolean)) {
+    const cut = line.indexOf("="), flag = cut < 0 ? line : line.slice(0, cut);
+    if (fields[flag]) write(flag, cut < 0 ? true : line.slice(cut + 1));
+    else if (!line.startsWith("-") && !keepChannel) $("channel").value = line;
+  }
+  preview();
+}
+
+function preview() {
+  const frame = $("frame"), caption = $("caption");
+  const m = /^(\d+):(\d+)$/.exec(read("--ratio")), height = Number(read("--height"));
+  const seconds = Number(read("--before")) + Number(read("--after"));
+  frame.replaceChildren();
+  if (!m || !+m[1] || !+m[2] || !(height >= 16) || !(seconds > 0)) {
+    frame.style.width = frame.style.height = "0";
+    caption.replaceChildren("Ratio must look like 9:16, with a height in pixels and a clip length above zero.");
+    return;
+  }
+  const ratio = m[1] / m[2], scale = Math.min(190, 150 / ratio);
+  frame.style.height = scale + "px";
+  frame.style.width = scale * ratio + "px";
+  const share = Number(read("--face-share")), cam = read("--cam");
+  const stacked = cam !== "off" && share > 0 && share < 1 && ratio <= 1;
+  if (stacked) {
+    const panel = el("div", {className: "cam"}, "Streamer cam"), game = el("div", {}, "Game");
+    panel.style.flex = share;
+    game.style.flex = 1 - share;
+    frame.append(...(cam === "top" ? [panel, game] : [game, panel]));
+  } else {
+    frame.append(el("div", {style: "flex:1"}, "Centre crop"));
+  }
+  const width = Math.max(2, Math.floor(Math.floor(height / 2) * 2 * ratio / 2) * 2);
+  caption.replaceChildren(
+    el("strong", {}, `${width} x ${Math.floor(height / 2) * 2} px, ${seconds} s`),
+    stacked
+      ? "A small facecam gets its own panel. If the streamer fills the picture, the clip follows their face instead."
+      : "One crop from the middle of the picture, or centred on the streamer when they fill it."
+  );
+}
+
+function show(state) {
+  const log = $("log"), pinned = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
+  for (const line of state.lines) log.append(line + "\n");
+  while (log.childNodes.length > 2000) log.firstChild.remove();
+  if (pinned && state.lines.length) log.scrollTop = log.scrollHeight;
+  next = state.next;
+  $("bar").classList.toggle("running", state.running);
+  $("start").disabled = state.running;
+  $("stop").disabled = !state.running || state.stopping;
+  $("status").textContent = state.stopping ? "Stopping - finishing clips in progress"
+    : state.running ? "Watching"
+    : state.exit ? "Stopped with an error - see the log"
+    : "Not running";
+}
+async function poll() {
+  try {
+    show(await api("/api/state?since=" + next));
+  } catch (error) {
+    $("status").textContent = "Lost contact with gui.py - is it still running?";
+  }
+  setTimeout(poll, 1000);
+}
+async function act(path, body) {
+  $("notice").textContent = "";
+  try {
+    await api(path, body);
+    show(await api("/api/state?since=" + next));
+  } catch (error) {
+    $("notice").textContent = error.message;
+  }
+}
+
+$("start").onclick = () => {
+  const channel = $("channel").value.trim();
+  if (!channel) { $("notice").textContent = "Enter a channel name first."; $("channel").focus(); return; }
+  act("/api/start", {channel, args: args()});
+};
+$("channel").onkeydown = event => { if (event.key === "Enter") $("start").click(); };
+$("stop").onclick = () => act("/api/stop", {});
+$("clips").onclick = () => act("/api/open-clips", {});
+$("reset").onclick = reset;
+$("save").onclick = () => {
+  const link = el("a", {download: "preset.txt", href: URL.createObjectURL(new Blob([args().map(a => a + "\n").join("")], {type: "text/plain"}))});
+  link.click();
+  URL.revokeObjectURL(link.href);
+};
+$("load").onclick = () => $("file").click();
+$("file").onchange = async event => {
+  const file = event.target.files[0];
+  if (file) apply((await file.text()).split(/\r?\n/), true);
+  event.target.value = "";
+};
+
+api("/api/options").then(({groups, last}) => {
+  build(groups);
+  apply(last);
+  poll();
+}).catch(error => { $("notice").textContent = error.message; });
+</script>
+</body>
+</html>

@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
-if [ -z "$1" ]; then
-    echo "Usage: ./watch.sh <twitch_channel> [--min 5]"
-    exit 1
-fi
+# ./watch.sh                      opens the settings window
+# ./watch.sh <channel> [options]  runs in the terminal
+cd "$(dirname "$0")" || exit 1
 
 # Activate virtual environment if present
-if [ -d "venv" ]; then
+if [ -f venv/bin/activate ]; then
     source venv/bin/activate
+elif [ -f venv/Scripts/activate ]; then
+    source venv/Scripts/activate
 fi
 
-python3 watcher.py "$@"
+PYTHON=$(command -v python || command -v python3)
+if [ -z "$1" ]; then
+    exec "$PYTHON" gui.py
+fi
+exec "$PYTHON" watcher.py "$@"
