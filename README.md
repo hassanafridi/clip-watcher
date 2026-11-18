@@ -99,6 +99,7 @@ To upload a clip by hand:
 - Clip streamers who allow it.
 - The subtitles (Whisper) and the face detector are small models that run locally; nothing is sent anywhere.
 - Twitch chat is read anonymously over TLS on port 443.
-- Kick chat is polled from the public message history every 2 seconds. That sees at most 25 new messages per poll, so spikes in very fast chats flatten out.
+- Kick chat is read from the public message history, which Kick refreshes every 10 seconds. Messages are counted by their own timestamps about 20 seconds late, and clips are timed to match, so Kick clips appear a little later than Twitch ones.
+- Once a minute the log says where chat stands, for example `chat: 52 messages in the last 10 s, usual 48, a spike needs 120`. If clips never come, lower the spike multiplier until that last number is within reach.
 - The settings page only answers requests from this machine that carry a secret built into the page it serves, so other websites cannot start or stop recordings.
 - `python test_watch.py` runs the self-check.

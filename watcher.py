@@ -2,6 +2,7 @@
 """Record a live Twitch or Kick stream and cut a vertical clip every time chat spikes."""
 import _thread
 import argparse
+import math
 import re
 import socket
 import ssl
@@ -12,6 +13,7 @@ import threading
 import time
 import urllib.request
 from collections import deque
+from datetime import datetime
 from pathlib import Path
 
 import upload
@@ -19,7 +21,9 @@ import upload
 RETRY = 5  # first chat reconnect delay, doubles up to 60 s
 TWITCH_IRC = ("irc.chat.twitch.tv", 443, True)  # host, port, TLS; 443 gets through firewalls that block 6667
 KICK_API = "https://kick.com/api/v2/channels"
-KICK_POLL = 2  # seconds between Kick chat polls
+KICK_POLL = 5  # seconds between Kick chat polls; Kick refreshes its history every 10 s
+KICK_PAGES = 8  # pages of 25 messages fetched per poll at most
+KICK_LAG = 20  # Kick chat is counted this many seconds late, see kick_session
 GOP_PAD = 4  # extra seconds cut ahead of a clip so it can start on a whole frame
 
 FACE_SCORE = 0.8
@@ -68,19 +72,40 @@ def kick_channel_id(channel):
 
 
 def kick_session(channel_id):
+    """Chat counts for Kick, replayed KICK_LAG seconds late by each message's own timestamp.
+
+    Kick caches its public message history for 10 s, so messages reach us in lumps. Counted on arrival
+    every lump would look like a spike; replayed by timestamp they give the real rate.
+    """
     import requests
 
-    # polls the public history (newest 25 messages), so counts flatten above
-    # 25 messages per KICK_POLL; move to Kick's chat websocket if that ceiling matters
-    seen = deque(maxlen=500)
+    # at most KICK_PAGES x 25 messages per poll; raise KICK_PAGES for chats faster than that
+    seen, due, offset, primed = deque(maxlen=5000), [], None, False
     while True:
-        r = requests.get(f"{KICK_API}/{channel_id}/messages", timeout=10)
-        if not r.ok:
-            raise OSError(f"Kick answered HTTP {r.status_code}")
-        new = [m["id"] for m in r.json()["data"]["messages"] if m["id"] not in seen]
-        yield len(new) if seen else 0
-        seen.extend(new)
-        time.sleep(KICK_POLL)
+        now, cursor, stamps = time.time(), None, []
+        for _ in range(KICK_PAGES if primed else 1):
+            params = {"cursor": cursor} if cursor else {}
+            r = requests.get(f"{KICK_API}/{channel_id}/messages", params=params, timeout=10)
+            if not r.ok:
+                raise OSError(f"Kick answered HTTP {r.status_code}")
+            data = r.json()["data"]
+            fresh = [m for m in data["messages"] if m["id"] not in seen]
+            seen.extend(m["id"] for m in fresh)
+            stamps += [datetime.fromisoformat(m["created_at"].replace("Z", "+00:00")).timestamp() for m in fresh]
+            cursor = data.get("cursor")
+            if len(fresh) < len(data["messages"]) or not fresh or not cursor:
+                break  # reached messages we already had
+        if stamps:
+            lag = now - max(stamps)  # smallest value seen = clock difference between Kick and this machine
+            offset = lag if offset is None else min(offset, lag)
+            if primed:
+                due += [stamp + offset + KICK_LAG for stamp in stamps]
+        primed = True
+        wake = now + KICK_POLL
+        while time.time() < wake:
+            yield sum(stamp <= time.time() for stamp in due)
+            due = [stamp for stamp in due if stamp > time.time()]
+            time.sleep(1)
 
 
 def chat(session, *args):
@@ -173,12 +198,15 @@ def ffmpeg(*args):
     subprocess.run(["ffmpeg", "-nostdin", "-y", "-loglevel", "error", *map(str, args)], check=True)
 
 
-def make_clip(rec, out, source, args):
-    time.sleep(args.after)
+def make_clip(rec, out, source, args, lag=0):
+    """lag: seconds between the spike in chat and us noticing it (Kick chat is counted late)."""
+    time.sleep(max(0, args.after - lag))
     raw = out.with_suffix(".ts")
     length = args.before + args.after
-    # the copy starts mid-GOP, so take a few seconds extra and trim exactly while encoding
-    ffmpeg("-sseof", -(length + GOP_PAD), "-i", rec, "-c", "copy", raw)
+    # the copy starts mid-GOP, so take a few seconds extra and trim exactly while encoding;
+    # with a lag the clip ends that much before the newest video
+    ffmpeg("-sseof", -(length + GOP_PAD + max(0, lag - args.after)), "-i", rec, "-t", length + GOP_PAD,
+           "-c", "copy", raw)
     with heavy:
         graph = layout(*find_face(raw), args)
         ffmpeg("-sseof", -length, "-i", raw, "-filter_complex", graph, "-map", "[v]", "-map", "0:a?",
@@ -315,7 +343,7 @@ def main():
     if args.stdin_stop:
         threading.Thread(target=lambda: (sys.stdin.read(), _thread.interrupt_main()), daemon=True).start()
 
-    history, count, last_clip = deque(maxlen=buckets), 0, 0.0
+    history, count, last_clip, next_note = deque(maxlen=buckets), 0, 0.0, 0.0
     bucket_end = time.time() + args.bucket
     try:
         for n in messages:
@@ -326,11 +354,21 @@ def main():
             if recorder.poll() is not None:
                 print("recording stopped (stream offline or ended)")
                 break
-            if len(history) == buckets and now - last_clip >= cooldown and is_spike(count, history, args.min, args.factor):
+            warm = len(history) == buckets
+            if warm and now - last_clip >= cooldown and is_spike(count, history, args.min, args.factor):
                 last_clip = now
                 out = Path("clips") / f"{channel}_{time.strftime('%Y%m%d_%H%M%S')}.mp4"
                 print(f"spike: {count} messages (median {statistics.median(history):g}), cutting {out}")
-                threading.Thread(target=make_clip, args=(rec, out, source, args)).start()
+                lag = KICK_LAG if args.kick else 0
+                threading.Thread(target=make_clip, args=(rec, out, source, args, lag)).start()
+            elif now >= next_note:  # once a minute, say where chat stands so a quiet log is not a mystery
+                next_note = now + 60
+                if warm:
+                    usual = statistics.median(history)
+                    need = max(args.min, math.ceil(args.factor * usual))
+                    print(f"chat: {count} messages in the last {args.bucket} s, usual {usual:g}, a spike needs {need}")
+                else:
+                    print(f"learning the usual chat rate: {len(history) * args.bucket} of {args.window} s")
             history.append(count)
             count, bucket_end = 0, now + args.bucket
     except KeyboardInterrupt:
