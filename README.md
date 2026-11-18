@@ -23,12 +23,15 @@ Settings page in your browser:
 
 It opens a page served from this machine only, at `http://127.0.0.1:8791/`. Every setting is on it, with a live preview of the clip layout, start and stop buttons, the log, and presets you can save and load. Keep the window `watch.bat` or `watch.sh` opened; closing it stops clip-watcher.
 
+The channel box takes a name or a pasted `twitch.tv` / `kick.com` link. Hover over a setting (or click into it) for a longer explanation of what it is for. The Theme button in the top bar switches between light, dark and following the system.
+
 A browser page cannot start a recording by itself, so opening `gui.html` on its own only works while clip-watcher is running: then it jumps straight to the live page, otherwise it tells you to start `watch.bat` first.
 
 Terminal:
 
     ./watch.sh <channel>                 # Twitch
     ./watch.sh <channel> --kick          # Kick
+    ./watch.sh https://kick.com/<channel>   # a pasted link works too
     ./watch.sh <channel> --min 5         # quiet chat
     ./watch.sh <channel> --upload        # also upload each clip (private)
     ./watch.sh <channel> @square.txt     # settings from a preset file

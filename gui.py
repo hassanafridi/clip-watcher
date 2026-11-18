@@ -34,6 +34,51 @@ LABELS = {
     "--upload": ("Upload to YouTube Shorts", ""), "--privacy": ("Visibility", ""),
     "--title": ("Title template", ""), "--description": ("Description template", ""),
 }
+# shown when a setting is hovered or focused: what it is for and when to change it
+DETAILS = {
+    "--kick": "Tick this when the streamer is on kick.com and you typed only their name. "
+              "Leave it off for twitch.tv. A pasted kick.com link is recognised on its own.",
+    "--quality": "The sharpest picture that gets recorded. Higher looks better but fills the disk faster, "
+                 "roughly 3 to 4 GB per hour at 1080p. If the stream does not offer it, the next one down is used.",
+    "--min": "A spike needs at least this many chat messages in one counting interval, so a quiet chat "
+             "does not trigger clips on a handful of messages. Try 5 for small channels, 40 or more for huge ones.",
+    "--factor": "How much busier than normal chat has to get. 2.5 means two and a half times the usual rate. "
+                "Lower gives more clips, higher keeps only the biggest moments.",
+    "--bucket": "Chat is counted in slices of this many seconds. Shorter slices react faster but are jumpier. "
+                "10 suits most channels.",
+    "--window": "The usual chat rate is taken from this many seconds of history. "
+                "No clip is made until this much time has passed after you start.",
+    "--before": "Seconds of video kept from before the spike was noticed. Chat reacts a few seconds late, "
+                "so the moment itself sits in this part.",
+    "--after": "Seconds kept after the spike was noticed, for the reaction. The clip is cut once they have passed.",
+    "--cooldown": "After a clip, new spikes are ignored for this long, so one long moment does not turn into "
+                  "several overlapping clips. Leave empty to use the clip length.",
+    "--ratio": "Shape of the finished clip. 9:16 is upright for Shorts, Reels and TikTok, 1:1 is square, "
+               "16:9 is normal widescreen.",
+    "--height": "Height of the finished clip in pixels. 1920 with 9:16 gives the standard 1080 x 1920. "
+                "A smaller number makes smaller files.",
+    "--crf": "Trade between picture quality and file size. 18 is close to the original, 23 is the usual balance, "
+             "28 is small and soft.",
+    "--cam": "Where the streamer's facecam goes when it is a small box on top of a game: its own panel on top "
+             "or at the bottom. Off keeps a single picture cropped from the middle.",
+    "--face-share": "How tall the cam panel is, as a part of the whole clip. 0.33 gives it a third.",
+    "--face-zoom": "How tightly the cam panel is cropped around the face. 4 shows about four face widths. "
+                   "A smaller number zooms in closer.",
+    "--big-face": "When the streamer's face is wider than this part of the picture, they are the whole show, "
+                  "as in a talking stream, so the clip follows the face and no cam panel is made.",
+    "--model": "The speech-to-text model that writes the subtitles. It runs on this machine. tiny is fastest, "
+               "base is the usual choice, small and medium are more accurate and much slower.",
+    "--language": "Language the streamer speaks, as a two-letter code such as en, de or es. "
+                  "Leave empty to have it detected for each clip.",
+    "--upload": "Sends every finished clip to your YouTube channel as a Short. "
+                "Needs the one-time YouTube setup described in the README.",
+    "--privacy": "Who can see uploaded clips. Private is only you, unlisted is anyone with the link, "
+                 "public is everyone.",
+    "--title": "Title given to each upload. {text} becomes the first words spoken in the clip "
+               "and {channel} the streamer's name.",
+    "--description": "Description given to each upload, with the same {text} and {channel} placeholders. "
+                     "A credit link to the stream is added for you.",
+}
 
 
 def options():
@@ -46,6 +91,7 @@ def options():
                 "flag": a.option_strings[0],
                 "label": LABELS.get(a.option_strings[0], (a.option_strings[0][2:].replace("-", " ").capitalize(),))[0],
                 "unit": LABELS.get(a.option_strings[0], ("", ""))[1],
+                "detail": DETAILS.get(a.option_strings[0], ""),
                 "help": a.help or "",
                 "kind": "bool" if a.nargs == 0 else "choice" if a.choices else "text",
                 "choices": list(a.choices or []),
@@ -185,8 +231,8 @@ def make_server(port=0):
                 return self.reply(200, {})
             if self.path != "/api/start":
                 return self.reply(404, {"error": "Not found."})
-            if not re.fullmatch(r"[A-Za-z0-9_-]{1,30}", channel):
-                return self.reply(400, {"error": "Enter a plain channel name, not a link."})
+            if not watcher.parse_channel(channel):
+                return self.reply(400, {"error": "Enter a channel name, or a twitch.tv or kick.com link"})
             if not all(isinstance(a, str) and a.partition("=")[0] in FLAGS for a in arguments):
                 return self.reply(400, {"error": "Unknown setting."})
             error = runner.start([channel, *arguments])
@@ -195,7 +241,11 @@ def make_server(port=0):
             LAST.write_text("".join(f"{a}\n" for a in [channel, *arguments]), encoding="utf-8")
             self.reply(200, {})
 
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    class Server(ThreadingHTTPServer):
+        # on Windows address reuse would let a second clip-watcher bind the same port and steal requests
+        allow_reuse_address = sys.platform != "win32"
+
+    httpd = Server(("127.0.0.1", port), Handler)
     httpd.runner = runner
     return httpd, token
 

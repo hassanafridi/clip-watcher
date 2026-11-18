@@ -195,6 +195,15 @@ def make_clip(rec, out, source, args):
             upload.publish(out, source, args.privacy, args.title, args.description)
 
 
+def parse_channel(text):
+    """(channel, is a Kick link) from a channel name or a twitch.tv / kick.com link; None if it is neither."""
+    text = text.strip()
+    link = re.fullmatch(r"(?:https?://)?(?:www\.)?(twitch\.tv|kick\.com)/([A-Za-z0-9_-]{1,30})/?", text, re.I)
+    name = link[2] if link else text
+    if re.fullmatch(r"[A-Za-z0-9_-]{1,30}", name):
+        return name.lower(), bool(link) and link[1].lower() == "kick.com"
+
+
 def ratio(text):
     m = re.fullmatch(r"(\d+):(\d+)", text)
     if not m or "0" in m.groups():
@@ -258,9 +267,10 @@ def build_parser():
 def main():
     p = build_parser()
     args = p.parse_args()
-    channel = args.channel.lower()
-    if not re.fullmatch(r"[a-z0-9_-]{1,30}", channel):
-        p.error("channel must be a plain channel name, not a URL")
+    if not parse_channel(args.channel):
+        p.error("channel must be a channel name or a twitch.tv / kick.com link")
+    channel, kick_link = parse_channel(args.channel)
+    args.kick = args.kick or kick_link
     if min(args.bucket, args.factor, args.before + args.after, args.face_zoom) <= 0 or args.before < 0 or args.after < 0:
         p.error("--bucket, --factor, --face-zoom and the clip length must be positive")
     if args.window < args.bucket or args.height < 16 or not 0 <= args.face_share < 1:

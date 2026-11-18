@@ -94,7 +94,12 @@ assert call("/api/start", {"channel": "ok", "args": []}, sent_token="")[0] == 40
 offered = {o["flag"] for g in call("/api/options")[1]["groups"] for o in g["options"]}
 flags = {a.option_strings[0] for a in watcher.build_parser()._actions if a.option_strings}
 assert offered == flags - {"-h", "--stdin-stop"}, "the page must offer every option"
-for bad in ({"channel": "@secrets.txt", "args": []}, {"channel": "https://twitch.tv/x", "args": []},
+assert watcher.parse_channel("OhnePixel") == ("ohnepixel", False)
+assert watcher.parse_channel("https://www.twitch.tv/ohnepixel") == ("ohnepixel", False)
+assert watcher.parse_channel("kick.com/xqc/") == ("xqc", True)
+assert watcher.parse_channel("https://evil.example/x") is None and watcher.parse_channel("-x y") is None
+assert all(o["detail"] for g in call("/api/options")[1]["groups"] for o in g["options"]), "every option explains itself"
+for bad in ({"channel": "@secrets.txt", "args": []}, {"channel": "https://evil.example/x", "args": []},
             {"channel": "ok", "args": ["--stdin-stop"]}, {"channel": "ok", "args": ["--nope=1"]},
             {"channel": "ok", "args": ["@file"]}, {"channel": "ok", "args": [5]}):
     assert call("/api/start", bad)[0] == 400, bad
