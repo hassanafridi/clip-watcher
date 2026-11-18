@@ -213,33 +213,44 @@ def build_parser():
     p.add_argument("--stdin-stop", action="store_true", help=argparse.SUPPRESS)  # the GUI stops us by closing stdin
     stream = p.add_argument_group("stream")
     stream.add_argument("--kick", action="store_true", help="the channel is on Kick, not Twitch")
-    stream.add_argument("--quality", default="best", help="stream quality to record, e.g. 720p60")
+    stream.add_argument("--quality", default="best", help="quality to record, for example best or 720p60")
     spike = p.add_argument_group("spike detection")
-    spike.add_argument("--min", type=int, default=15, help="fewest messages per bucket that count as a spike")
-    spike.add_argument("--factor", type=float, default=2.5, help="spike = this many times the median bucket")
-    spike.add_argument("--bucket", type=int, default=10, help="seconds of chat per bucket")
-    spike.add_argument("--window", type=int, default=180, help="seconds of history the median is taken over")
+    spike.add_argument("--min", type=int, default=15,
+                       help="fewest chat messages in one counting interval that can count as a spike")
+    spike.add_argument("--factor", type=float, default=2.5,
+                       help="how many times busier than usual chat must be to count as a spike")
+    spike.add_argument("--bucket", type=int, default=10, help="length of one counting interval, in seconds")
+    spike.add_argument("--window", type=int, default=180,
+                       help="how far back the usual chat rate is measured, in seconds")
     clip = p.add_argument_group("clip")
     clip.add_argument("--before", type=float, default=20, help="seconds kept before the spike")
     clip.add_argument("--after", type=float, default=10, help="seconds kept after the spike")
-    clip.add_argument("--cooldown", type=float, help="seconds between clips (default: the clip length)")
-    clip.add_argument("--ratio", type=ratio, default="9:16", help="aspect ratio, WIDTH:HEIGHT")
-    clip.add_argument("--height", type=int, default=1920, help="clip height in pixels; width follows from --ratio")
-    clip.add_argument("--crf", type=int, default=23, help="x264 quality, lower is better and bigger")
+    clip.add_argument("--cooldown", type=float,
+                      help="shortest wait between two clips, in seconds; empty means one clip length")
+    clip.add_argument("--ratio", type=ratio, default="9:16", help="shape of the clip as width:height, for example 9:16")
+    clip.add_argument("--height", type=int, default=1920,
+                      help="clip height in pixels; the width follows from the aspect ratio")
+    clip.add_argument("--crf", type=int, default=23,
+                      help="picture quality from 0 to 51; lower looks better and makes bigger files")
     clip.add_argument("--cam", default="top", choices=["top", "bottom", "off"],
-                      help="where the streamer's facecam panel goes; off never stacks")
+                      help="where the streamer's cam panel sits; off keeps one picture")
     clip.add_argument("--face-share", type=float, default=1 / 3,
-                      help="share of the clip height given to the facecam panel")
-    clip.add_argument("--face-zoom", type=float, default=4, help="facecam crop width, in face widths")
+                      help="part of the clip height the cam panel takes, from 0 to 1")
+    clip.add_argument("--face-zoom", type=float, default=4,
+                      help="room left around the face; a bigger number shows more of the cam")
     clip.add_argument("--big-face", type=float, default=0.12,
-                      help="a face wider than this share of the frame fills the clip instead of getting a panel")
-    clip.add_argument("--model", default="base", help="Whisper model for the subtitles")
-    clip.add_argument("--language", help="subtitle language, e.g. en (default: detect)")
+                      help="a face wider than this part of the picture gets the whole clip instead of a panel")
+    clip.add_argument("--model", default="base",
+                      help="speech model for the subtitles: tiny, base, small, medium or large; bigger is slower and more accurate")
+    clip.add_argument("--language", help="language spoken on stream, for example en; empty detects it")
     yt = p.add_argument_group("YouTube")
     yt.add_argument("--upload", action="store_true", help="upload every clip to YouTube Shorts")
-    yt.add_argument("--privacy", default="private", choices=["private", "unlisted", "public"])
-    yt.add_argument("--title", default=upload.TITLE, help="title template; {text} = what was said, {channel}")
-    yt.add_argument("--description", default=upload.DESCRIPTION, help="description template, same fields")
+    yt.add_argument("--privacy", default="private", choices=["private", "unlisted", "public"],
+                    help="who can see uploaded clips")
+    yt.add_argument("--title", default=upload.TITLE,
+                    help="title of the upload; {text} is what was said, {channel} the channel name")
+    yt.add_argument("--description", default=upload.DESCRIPTION,
+                    help="description of the upload; same placeholders as the title")
     return p
 
 

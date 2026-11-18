@@ -20,6 +20,20 @@ PAGE = HERE / "gui.html"
 LAST = HERE / "last_session.txt"
 NOISE = ("frames/s", "%|", "WARN:")  # progress bars and library chatter kept out of the log
 KEEP = 2000  # log lines held for the page
+# what the page calls each option, and its unit; anything missing falls back to the flag name
+LABELS = {
+    "--kick": ("Channel is on Kick", ""), "--quality": ("Stream quality", ""),
+    "--min": ("Minimum messages", ""), "--factor": ("Spike multiplier", "x"),
+    "--bucket": ("Counting interval", "s"), "--window": ("Comparison window", "s"),
+    "--before": ("Before the spike", "s"), "--after": ("After the spike", "s"),
+    "--cooldown": ("Pause between clips", "s"), "--ratio": ("Aspect ratio", ""),
+    "--height": ("Clip height", "px"), "--crf": ("Picture quality", ""),
+    "--cam": ("Streamer cam position", ""), "--face-share": ("Cam panel size", ""),
+    "--face-zoom": ("Cam zoom", ""), "--big-face": ("Full-frame face threshold", ""),
+    "--model": ("Subtitle model", ""), "--language": ("Subtitle language", ""),
+    "--upload": ("Upload to YouTube Shorts", ""), "--privacy": ("Visibility", ""),
+    "--title": ("Title template", ""), "--description": ("Description template", ""),
+}
 
 
 def options():
@@ -30,7 +44,9 @@ def options():
         items = [
             {
                 "flag": a.option_strings[0],
-                "help": a.help,
+                "label": LABELS.get(a.option_strings[0], (a.option_strings[0][2:].replace("-", " ").capitalize(),))[0],
+                "unit": LABELS.get(a.option_strings[0], ("", ""))[1],
+                "help": a.help or "",
                 "kind": "bool" if a.nargs == 0 else "choice" if a.choices else "text",
                 "choices": list(a.choices or []),
                 "default": "" if a.default is None else f"{a.default:g}" if isinstance(a.default, float) else a.default,

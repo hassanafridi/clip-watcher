@@ -7,83 +7,100 @@
 <link rel="icon" href="data:,">
 <style>
 :root {
-  --bay: #eef1f4; --panel: #ffffff; --ink: #18212b; --muted: #5c6b7a; --line: #d5dbe2;
-  --tally: #d7263d; --cam: #1f7a8c; --on-cam: #ffffff; --game: #c9d2dc;
+  --page: #fafafa; --card: #ffffff; --raised: #f4f4f5;
+  --text: #171717; --text-2: #525252; --muted: #737373; --line: rgba(23, 23, 23, 0.1); --line-strong: rgba(23, 23, 23, 0.24);
+  --fill: #171717; --fill-hover: #333333; --on-fill: #ffffff;
+  --tally: #dc2626; --on-tally: #ffffff; --cam: #1f7a8c; --on-cam: #ffffff;
   --display: "Bahnschrift", "DIN Alternate", "Roboto Condensed", "Arial Narrow", system-ui, sans-serif;
   --body: system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --mono: ui-monospace, Consolas, "SF Mono", Menlo, monospace;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bay: #12171d; --panel: #1a2129; --ink: #e7ecf1; --muted: #94a3b3; --line: #2b3540;
-    --tally: #ff5468; --cam: #4fb3c6; --on-cam: #12171d; --game: #33404d;
+    --page: #141415; --card: #19191b; --raised: #232325;
+    --text: #ededed; --text-2: #a1a1a6; --muted: #85858b; --line: rgba(237, 237, 237, 0.1); --line-strong: rgba(237, 237, 237, 0.24);
+    --fill: #ededed; --fill-hover: #ffffff; --on-fill: #141415;
+    --tally: #e5484d; --on-tally: #141415; --cam: #4fb3c6; --on-cam: #141415;
   }
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bay); color: var(--ink); font: 15px/1.5 var(--body); }
-h1, h2 { font-family: var(--display); font-weight: 600; margin: 0; }
-h1 { font-size: 22px; letter-spacing: 0.02em; }
-h2 { font-size: 17px; letter-spacing: 0.01em; margin-bottom: 12px; }
+body { margin: 0; background: var(--page); color: var(--text); font: 14px/20px var(--body); }
+h1, h2 { font-family: var(--display); margin: 0; }
+h1 { font-size: 18px; line-height: 1; font-weight: 600; letter-spacing: 0.02em; }
+h2 { font-size: 16px; line-height: 20px; font-weight: 500; margin-bottom: 16px; }
 button, input, select { font: inherit; color: inherit; }
-:focus-visible { outline: 2px solid var(--cam); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 
 .bar {
-  position: sticky; top: 0; z-index: 2; background: var(--panel); border-bottom: 1px solid var(--line);
-  padding: 12px 24px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px;
+  position: sticky; top: 0; z-index: 2; min-height: 60px; background: var(--card); border-bottom: 1px solid var(--line);
+  padding: 12px 32px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px;
 }
-.bar label { color: var(--muted); }
-.bar .channel { display: flex; align-items: center; gap: 8px; flex: 1 1 260px; max-width: 420px; }
-.bar .channel input { flex: 1; min-width: 0; }
-.status { display: flex; align-items: center; gap: 8px; margin-left: auto; min-height: 36px; }
-.dot { width: 12px; height: 12px; border-radius: 50%; background: var(--line); flex: none; }
-.running .dot { background: var(--tally); animation: tally 1.6s ease-in-out infinite; }
+.bar label { color: var(--text-2); }
+.channel { display: flex; align-items: center; gap: 8px; flex: 1 1 260px; max-width: 400px; }
+.channel input { flex: 1; min-width: 0; }
+.status { display: flex; align-items: center; gap: 8px; margin-left: auto; min-height: 36px; color: var(--text-2); }
+.lamp { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--muted); flex: none; }
+.running .lamp { background: var(--tally); border-color: var(--tally); animation: tally 1.6s ease-in-out infinite; }
+.running .status { color: var(--text); }
 @keyframes tally { 50% { opacity: 0.35; } }
-@media (prefers-reduced-motion: reduce) { .running .dot { animation: none; } }
-.notice { flex-basis: 100%; margin: 0; color: var(--tally); font-weight: 600; }
+@media (prefers-reduced-motion: reduce) { .running .lamp { animation: none; } }
+.notice { flex-basis: 100%; margin: 0; color: var(--tally); font-weight: 500; }
 .notice:empty { display: none; }
 
 input[type="text"], select {
-  height: 36px; padding: 0 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; width: 100%;
+  height: 36px; width: 100%; padding: 0 12px; background: var(--card); border: 1px solid var(--line-strong); border-radius: 8px;
+  font-variant-numeric: tabular-nums; transition: border-color 150ms var(--ease);
 }
-input[type="checkbox"] { width: 18px; height: 18px; margin: 0; accent-color: var(--cam); }
+input[type="text"]:hover, select:hover { border-color: var(--muted); }
+input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var(--fill); }
 button {
-  height: 36px; padding: 0 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); cursor: pointer;
+  height: 36px; padding: 0 16px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--card); cursor: pointer;
+  transition: background-color 150ms var(--ease), border-color 150ms var(--ease), color 150ms var(--ease), transform 150ms var(--ease);
 }
-button:disabled { opacity: 0.45; cursor: default; }
-button.go { background: var(--ink); border-color: var(--ink); color: var(--bay); font-weight: 600; }
-button.halt { border-color: var(--tally); color: var(--tally); font-weight: 600; }
-.running button.halt:not(:disabled) { background: var(--tally); color: var(--panel); }
+button:hover:not(:disabled) { background: var(--raised); }
+button:active:not(:disabled) { transform: scale(0.98); }
+button:disabled { color: var(--muted); cursor: default; }
+button.go { background: var(--fill); border-color: var(--fill); color: var(--on-fill); font-weight: 500; }
+button.go:hover:not(:disabled) { background: var(--fill-hover); border-color: var(--fill-hover); }
+button.go:disabled { background: var(--raised); border-color: var(--line); color: var(--muted); }
+.running button.halt:not(:disabled) { background: var(--tally); border-color: var(--tally); color: var(--on-tally); font-weight: 500; }
 
 main {
-  max-width: 1180px; margin: 0 auto; padding: 24px;
-  display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 32px; align-items: start;
+  max-width: 1440px; margin: 0 auto; padding: 32px;
+  display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 48px; align-items: start;
 }
-.settings section { padding: 20px 0; border-top: 1px solid var(--line); }
-.settings section:first-of-type { border-top: 0; padding-top: 0; }
-.tools { display: flex; flex-wrap: wrap; gap: 8px; padding-bottom: 20px; }
-.fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 16px 24px; }
-.field label { display: block; font-weight: 600; margin-bottom: 4px; }
+.tools { display: flex; flex-wrap: wrap; gap: 8px; padding-bottom: 24px; }
+.settings section { padding: 24px 0; border-top: 1px solid var(--line); }
+.fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 20px 24px; }
+.field label { display: block; font-weight: 500; margin-bottom: 4px; }
 .field.check label { display: flex; align-items: center; gap: 8px; min-height: 36px; margin: 0; }
-.help { margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 1.4; }
+.field.wide { grid-column: 1 / -1; }
+.control { display: flex; align-items: center; gap: 8px; max-width: 240px; }
+.short .control { max-width: 128px; }
+.wide .control { max-width: 560px; }
+.unit { color: var(--muted); font: 12px/16px var(--mono); }
+.help { margin: 4px 0 0; color: var(--text-2); font-size: 13px; max-width: 44ch; }
+.help::first-letter { text-transform: uppercase; }
 
-aside { position: sticky; top: 84px; display: grid; gap: 24px; }
+aside { position: sticky; top: 92px; display: grid; gap: 32px; }
 .stage { display: flex; gap: 16px; align-items: center; }
 .frame {
   flex: none; display: flex; flex-direction: column; overflow: hidden;
-  border: 2px solid var(--ink); border-radius: 8px; background: var(--game);
+  border: 2px solid var(--text); border-radius: 12px; background: var(--raised);
 }
-.frame div { display: flex; align-items: center; justify-content: center; font-size: 12px; text-align: center; padding: 2px; }
-.frame .cam { background: var(--cam); color: var(--on-cam); font-weight: 600; }
-.caption { margin: 0; color: var(--muted); font-size: 13px; }
-.caption strong { display: block; color: var(--ink); font: 600 17px var(--display); }
+.frame div { display: flex; align-items: center; justify-content: center; font-size: 12px; line-height: 16px; text-align: center; padding: 4px; color: var(--text-2); }
+.frame .cam { background: var(--cam); color: var(--on-cam); font-weight: 500; }
+.caption { margin: 0; color: var(--text-2); font-size: 13px; }
+.caption strong { display: block; margin-bottom: 4px; color: var(--text); font: 500 20px/24px var(--display); font-variant-numeric: tabular-nums; }
 #log {
-  margin: 0; height: 340px; overflow: auto; padding: 10px 12px; background: var(--panel);
-  border: 1px solid var(--line); border-radius: 6px; font: 12.5px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word;
+  margin: 0; height: 320px; overflow: auto; padding: 12px; background: var(--card);
+  border: 1px solid var(--line); border-radius: 12px; font: 12px/18px var(--mono); white-space: pre-wrap; word-break: break-word;
 }
-#log:empty::before { content: "Nothing yet. Enter a channel and start watching."; color: var(--muted); font-family: var(--body); }
+#log:empty::before { content: "Nothing yet - enter a channel and start watching"; color: var(--muted); font-family: var(--body); }
 
 @media (max-width: 860px) {
-  main { grid-template-columns: minmax(0, 1fr); padding: 16px; }
+  main { grid-template-columns: minmax(0, 1fr); padding: 16px; gap: 24px; }
   aside { position: static; }
   .bar { padding: 12px 16px; position: static; }
   .status { margin-left: 0; }
@@ -96,11 +113,11 @@ aside { position: sticky; top: 84px; display: grid; gap: 24px; }
   <h1>clip-watcher</h1>
   <div class="channel">
     <label for="channel">Channel</label>
-    <input type="text" id="channel" autocomplete="off" spellcheck="false" placeholder="channel name">
+    <input type="text" id="channel" autocomplete="off" spellcheck="false" placeholder="Channel name">
   </div>
   <button class="go" id="start">Start watching</button>
   <button class="halt" id="stop" disabled>Stop</button>
-  <div class="status" role="status"><span class="dot"></span><span id="status">Not running</span></div>
+  <div class="status" role="status"><span class="lamp"></span><span id="status">Not recording</span></div>
   <p class="notice" id="notice" role="alert"></p>
 </header>
 <main>
@@ -156,17 +173,20 @@ function build(groups) {
     const grid = el("div", {className: "fields"});
     for (const opt of group.options) {
       const id = "o" + opt.flag, helpId = "h" + opt.flag;
-      const name = opt.flag.slice(2).replace(/-/g, " ");
-      const label = name[0].toUpperCase() + name.slice(1);
       let input, field;
       if (opt.kind === "bool") {
         input = el("input", {type: "checkbox", id});
-        field = el("div", {className: "field check"}, el("label", {}, input, label));
+        field = el("div", {className: "field check"}, el("label", {}, input, opt.label));
       } else {
         input = opt.kind === "choice"
           ? el("select", {id}, ...opt.choices.map(c => el("option", {value: c}, c)))
           : el("input", {type: "text", id, autocomplete: "off", spellcheck: false});
-        field = el("div", {className: "field"}, el("label", {htmlFor: id}, label), input);
+        // numbers get a short box, templates the full row, everything else a medium one
+        const size = String(opt.default).includes("{") ? " wide"
+          : opt.unit || opt.kind === "choice" || /^[\d.:]+$/.test(String(opt.default)) ? " short" : "";
+        const control = el("div", {className: "control"}, input);
+        if (opt.unit) control.append(el("span", {className: "unit"}, opt.unit));
+        field = el("div", {className: "field" + size}, el("label", {htmlFor: id}, opt.label), control);
       }
       input.setAttribute("aria-describedby", helpId);
       input.addEventListener("input", preview);
@@ -218,10 +238,10 @@ function preview() {
   frame.replaceChildren();
   if (!m || !+m[1] || !+m[2] || !(height >= 16) || !(seconds > 0)) {
     frame.style.width = frame.style.height = "0";
-    caption.replaceChildren("Ratio must look like 9:16, with a height in pixels and a clip length above zero.");
+    caption.replaceChildren("The aspect ratio must look like 9:16, with a height in pixels and a clip length above zero");
     return;
   }
-  const ratio = m[1] / m[2], scale = Math.min(190, 150 / ratio);
+  const ratio = m[1] / m[2], scale = Math.min(192, 152 / ratio);
   frame.style.height = scale + "px";
   frame.style.width = scale * ratio + "px";
   const share = Number(read("--face-share")), cam = read("--cam");
@@ -253,9 +273,9 @@ function show(state) {
   $("start").disabled = state.running;
   $("stop").disabled = !state.running || state.stopping;
   $("status").textContent = state.stopping ? "Stopping - finishing clips in progress"
-    : state.running ? "Watching"
+    : state.running ? "Recording"
     : state.exit ? "Stopped with an error - see the log"
-    : "Not running";
+    : "Not recording";
 }
 async function poll() {
   try {
@@ -277,7 +297,7 @@ async function act(path, body) {
 
 $("start").onclick = () => {
   const channel = $("channel").value.trim();
-  if (!channel) { $("notice").textContent = "Enter a channel name first."; $("channel").focus(); return; }
+  if (!channel) { $("notice").textContent = "Enter a channel name first"; $("channel").focus(); return; }
   act("/api/start", {channel, args: args()});
 };
 $("channel").onkeydown = event => { if (event.key === "Enter") $("start").click(); };
