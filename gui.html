@@ -37,7 +37,10 @@ button, input, select { font: inherit; color: inherit; }
   padding: 12px max(32px, calc((100% - 1376px) / 2)); display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px;
 }
 .offline main { display: none; }
-.offline .notice { color: var(--text); font-weight: 400; max-width: 72ch; padding: 4px 0 8px; }
+.gate { max-width: 624px; margin: 96px auto; padding: 0 32px; }
+.gate h2 { font-size: 20px; line-height: 24px; margin-bottom: 12px; }
+.gate p { margin: 0 0 8px; color: var(--text-2); }
+.gate code { font: 13px/20px var(--mono); color: var(--text); background: var(--raised); padding: 2px 4px; border-radius: 4px; }
 .bar label { color: var(--text-2); }
 .channel { display: flex; align-items: center; gap: 8px; flex: 1 1 260px; max-width: 400px; }
 .channel input { flex: 1; min-width: 0; }
@@ -122,6 +125,11 @@ aside { position: sticky; top: 92px; display: grid; gap: 32px; }
   <div class="status" role="status"><span class="lamp"></span><span id="status">Not recording</span></div>
   <p class="notice" id="notice" role="alert"></p>
 </header>
+<div class="gate" id="gate" hidden>
+  <h2 id="gate-title"></h2>
+  <p id="gate-text"></p>
+  <p>On Windows, double-click <code>watch.bat</code> in the clip-watcher folder. On Linux or macOS, run <code>./watch.sh</code>. Keep the window it opens; closing it stops clip-watcher.</p>
+</div>
 <main>
   <div class="settings">
     <div class="tools">
@@ -149,18 +157,17 @@ aside { position: sticky; top: 92px; display: grid; gap: 32px; }
 </main>
 <script>
 const $ = id => document.getElementById(id);
-const token = new URLSearchParams(location.search).get("t") || "";
+const token = "__TOKEN__";  // filled in by gui.py when it serves this page
+const HELPER = "http://127.0.0.1:8791/";
 const fields = {};
 let next = 0;
-
-const RESTART = "Double-click watch.bat on Windows, or run ./watch.sh, and use the page it opens";
 
 async function api(path, body) {
   const response = await fetch(path, {
     method: body ? "POST" : "GET",
     headers: body ? {"X-Token": token, "Content-Type": "application/json"} : {"X-Token": token},
     body: body ? JSON.stringify(body) : undefined,
-  }).catch(() => { throw new Error("The clip-watcher helper is not running. " + RESTART); });
+  }).catch(() => { throw new Error("clip-watcher is not running any more - start it again with watch.bat or ./watch.sh"); });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || response.statusText);
   return data;
@@ -322,20 +329,27 @@ $("file").onchange = async event => {
 };
 
 // nothing on the page works without gui.py behind it, so say how to start it instead of showing a dead form
-function offline(message) {
+function offline(title, text) {
   document.body.classList.add("offline");
-  for (const button of document.querySelectorAll("button, #channel")) button.disabled = true;
+  for (const control of document.querySelectorAll(".bar button, #channel")) control.disabled = true;
   $("status").textContent = "Not connected";
-  $("notice").textContent = message;
+  $("gate-title").textContent = title;
+  $("gate-text").textContent = text;
+  $("gate").hidden = false;
 }
 if (location.protocol === "file:") {
-  offline("This file cannot record on its own: a browser page is not allowed to start programs. " + RESTART);
+  // opened straight from disk: hand over to the running clip-watcher if there is one
+  fetch(HELPER, {mode: "no-cors"}).then(
+    () => location.replace(HELPER),
+    () => offline("clip-watcher is not started yet",
+                  "This page is only the control panel. A browser page cannot start a recording by itself, so clip-watcher has to be running first. Once it is, this file opens straight into it.")
+  );
 } else {
   api("/api/options").then(({groups, last}) => {
     build(groups);
     apply(last);
     poll();
-  }).catch(error => offline(error.message));
+  }).catch(error => offline("This page lost its connection", error.message));
 }
 </script>
 </body>

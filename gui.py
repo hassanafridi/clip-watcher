@@ -111,6 +111,9 @@ class Runner:
             }
 
 
+PORT = 8791  # gui.html looks for the helper here when it is opened straight from disk
+
+
 def make_server(port=0):
     """HTTP server on 127.0.0.1 plus the secret its page must send with every request."""
     token, runner = secrets.token_urlsafe(16), Runner()
@@ -128,19 +131,25 @@ def make_server(port=0):
             self.end_headers()
             self.wfile.write(data)
 
+        def local(self):
+            return self.headers.get("Host", "") in (f"127.0.0.1:{self.server.server_port}",
+                                                    f"localhost:{self.server.server_port}")
+
         def allowed(self):
-            # the token keeps other websites from driving this server; the Host check stops DNS rebinding
-            local = self.headers.get("Host", "") in (f"127.0.0.1:{self.server.server_port}",
-                                                     f"localhost:{self.server.server_port}")
-            if not local or not secrets.compare_digest(self.headers.get("X-Token", ""), token):
-                self.reply(403, {"error": "This link is out of date. Use the page watch.bat or ./watch.sh just opened"})
+            # the page we serve carries the token and other websites cannot read that page, so they
+            # cannot drive this server; the Host check stops DNS rebinding
+            if not self.local() or not secrets.compare_digest(self.headers.get("X-Token", ""), token):
+                self.reply(403, {"error": "clip-watcher was restarted. Reload this page"})
                 return False
             return True
 
         def do_GET(self):
             path, _, query = self.path.partition("?")
             if path == "/":
-                self.reply(200, PAGE.read_bytes(), "text/html; charset=utf-8")
+                if not self.local():
+                    return self.reply(403, {"error": "Not found."})
+                page = PAGE.read_text(encoding="utf-8").replace("__TOKEN__", token)
+                self.reply(200, page.encode(), "text/html; charset=utf-8")
             elif not self.allowed():
                 return
             elif path == "/api/options":
@@ -193,11 +202,18 @@ def make_server(port=0):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--port", type=int, default=0, help="port to serve on (default: any free port)")
+    p.add_argument("--port", type=int, default=PORT, help=f"port to serve on (default {PORT})")
     p.add_argument("--no-browser", action="store_true", help="print the link instead of opening a browser")
     args = p.parse_args()
-    httpd, token = make_server(args.port)
-    url = f"http://127.0.0.1:{httpd.server_port}/?t={token}"
+    url = f"http://127.0.0.1:{args.port}/"
+    try:
+        httpd, _ = make_server(args.port)
+    except OSError:
+        # most likely clip-watcher is already running: show that one instead of starting a second
+        print(f"Port {args.port} is in use. If clip-watcher is already running, its page is {url}", flush=True)
+        if not args.no_browser:
+            webbrowser.open(url)
+        return
     print(f"clip-watcher settings: {url}\nKeep this window open. Ctrl+C quits.", flush=True)
     if not args.no_browser:
         webbrowser.open(url)

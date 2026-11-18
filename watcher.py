@@ -213,7 +213,8 @@ def build_parser():
     p.add_argument("--stdin-stop", action="store_true", help=argparse.SUPPRESS)  # the GUI stops us by closing stdin
     stream = p.add_argument_group("stream")
     stream.add_argument("--kick", action="store_true", help="the channel is on Kick, not Twitch")
-    stream.add_argument("--quality", default="best", help="quality to record, for example best or 720p60")
+    stream.add_argument("--quality", default="1080p", choices=["1080p", "720p", "480p", "360p", "160p"],
+                        help="highest quality to record; the best the stream offers up to this is used")
     spike = p.add_argument_group("spike detection")
     spike.add_argument("--min", type=int, default=15,
                        help="fewest chat messages in one counting interval that can count as a spike")
@@ -285,7 +286,9 @@ def main():
     Path("clips").mkdir(exist_ok=True)
     rec = Path("rec") / f"{channel}_{time.strftime('%Y%m%d_%H%M%S')}.ts"
     recorder = subprocess.Popen(
-        [sys.executable, "-m", "streamlink", f"https://{source}", args.quality, "-O"],
+        # streamlink ranks 1080p60 above 1080p, so the cap is written against the 60 fps name
+        [sys.executable, "-m", "streamlink", "--stream-sorting-excludes", f">{args.quality}60",
+         f"https://{source}", "best", "-O"],
         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
     )
     # remux to MPEG-TS, the one container ffmpeg can cut from while the file is still growing

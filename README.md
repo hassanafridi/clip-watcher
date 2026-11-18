@@ -21,7 +21,9 @@ Settings page in your browser:
 
     ./watch.sh          (Windows: watch.bat)
 
-It opens a page served from this machine only. Every setting is on it, with a live preview of the clip layout, start and stop buttons, the log, and presets you can save and load. Keep the terminal window open while you use it.
+It opens a page served from this machine only, at `http://127.0.0.1:8791/`. Every setting is on it, with a live preview of the clip layout, start and stop buttons, the log, and presets you can save and load. Keep the window `watch.bat` or `watch.sh` opened; closing it stops clip-watcher.
+
+A browser page cannot start a recording by itself, so opening `gui.html` on its own only works while clip-watcher is running: then it jumps straight to the live page, otherwise it tells you to start `watch.bat` first.
 
 Terminal:
 
@@ -42,7 +44,7 @@ A spike is a 10 second chat bucket with at least `--min` messages and at least 2
 | Option | Default | What it changes |
 | --- | --- | --- |
 | `--kick` | off | the channel is on Kick, not Twitch |
-| `--quality` | best | stream quality to record, e.g. `720p60` |
+| `--quality` | 1080p | highest quality to record: `1080p`, `720p`, `480p`, `360p` or `160p`; the best the stream offers up to this is used |
 | `--min` | 15 | fewest messages per bucket that count as a spike |
 | `--factor` | 2.5 | spike = this many times the median bucket |
 | `--bucket` | 10 | seconds of chat per bucket |
@@ -95,5 +97,5 @@ To upload a clip by hand:
 - The subtitles (Whisper) and the face detector are small models that run locally; nothing is sent anywhere.
 - Twitch chat is read anonymously over TLS on port 443.
 - Kick chat is polled from the public message history every 2 seconds. That sees at most 25 new messages per poll, so spikes in very fast chats flatten out.
-- The settings page only answers requests from this machine that carry the secret in the link `gui.py` prints.
+- The settings page only answers requests from this machine that carry a secret built into the page it serves, so other websites cannot start or stop recordings.
 - `python test_watch.py` runs the self-check.

@@ -85,7 +85,9 @@ def call(path, body=None, sent_token=token, host=None):
         return e.code, json.loads(e.read())
 
 
-assert call("/")[0] == 200
+status, page = call("/", sent_token="")
+assert status == 200 and token.encode() in page and b"__TOKEN__" not in page, "the served page carries the token"
+assert call("/", host="evil.example")[0] == 403, "the token is not handed to a rebound hostname"
 assert call("/api/options", sent_token="wrong")[0] == 403, "another website cannot drive the server"
 assert call("/api/options", host="evil.example")[0] == 403, "DNS rebinding"
 assert call("/api/start", {"channel": "ok", "args": []}, sent_token="")[0] == 403
