@@ -5,5 +5,6 @@ slips/
 __pycache__/
 client_secret.json
 token.json
-last_session.txt
+streams.json
 *.onnx
+apps.json

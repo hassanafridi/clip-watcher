@@ -47,7 +47,7 @@ def youtube():
     return AuthorizedSession(creds)
 
 
-def publish(clip, source, privacy="private", title=TITLE, description=DESCRIPTION):
+def publish(clip, source, privacy="private", title=TITLE, description=DESCRIPTION, say=print):
     """Upload clip (an .mp4 with an .srt beside it) and return the YouTube video id."""
     clip = Path(clip)
     title, description = describe(transcript(clip.with_suffix(".srt")), source.rsplit("/", 1)[-1], title, description)
@@ -68,7 +68,7 @@ def publish(clip, source, privacy="private", title=TITLE, description=DESCRIPTIO
         done = http.put(start.headers["Location"], data=f, headers={"Content-Type": "video/mp4"})
     if not done.ok:
         raise RuntimeError(f"YouTube upload failed: {done.status_code} {done.text[:300]}")
-    print(f"uploaded https://youtube.com/shorts/{done.json()['id']} ({privacy}): {title}")
+    say(f"uploaded https://youtube.com/shorts/{done.json()['id']} ({privacy}): {title}")
     return done.json()["id"]
 
 

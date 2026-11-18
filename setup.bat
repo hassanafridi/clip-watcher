@@ -19,6 +19,8 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 
 echo.
-echo [DONE] Setup complete! Run: watch.bat ^<twitch_channel^>
+where ffmpeg >nul 2>nul
+if %errorlevel% neq 0 echo [!] ffmpeg is still not on PATH. Open a new window and run setup.bat again, or install ffmpeg by hand.
+echo [DONE] Setup complete. Run watch.bat to open the streams board, or watch.bat ^<channel^> to watch one in the terminal.
 pause
 

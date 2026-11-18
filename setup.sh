@@ -29,5 +29,5 @@ pip install -r requirements.txt
 chmod +x watch.sh 2>/dev/null || true
 
 echo ""
-echo "[✅ DONE] Setup complete! Run: ./watch.sh <twitch_channel>"
+echo "[DONE] Setup complete. Run ./watch.sh to open the streams board, or ./watch.sh <channel> to watch one in the terminal."
 

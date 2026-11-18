@@ -7,6 +7,7 @@
 <link rel="icon" href="data:,">
 <style>
 :root {
+  color-scheme: light;
   --page: #fafafa; --card: #ffffff; --raised: #f4f4f5;
   --text: #171717; --text-2: #525252; --muted: #737373; --line: rgba(23, 23, 23, 0.1); --line-strong: rgba(23, 23, 23, 0.24);
   --fill: #171717; --fill-hover: #333333; --on-fill: #ffffff;
@@ -16,7 +17,6 @@
   --mono: ui-monospace, Consolas, "SF Mono", Menlo, monospace;
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
 }
-:root { color-scheme: light; }
 :root[data-theme="dark"] {
   color-scheme: dark;
   --page: #141415; --card: #19191b; --raised: #232325;
@@ -28,30 +28,30 @@
 body { margin: 0; background: var(--page); color: var(--text); font: 14px/20px var(--body); }
 h1, h2 { font-family: var(--display); margin: 0; }
 h1 { font-size: 18px; line-height: 1; font-weight: 600; letter-spacing: 0.02em; }
-h2 { font-size: 16px; line-height: 20px; font-weight: 500; margin-bottom: 16px; }
+h2 { font-size: 18px; line-height: 24px; font-weight: 500; }
 button, input, select { font: inherit; color: inherit; }
 :focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 
 .bar {
-  position: sticky; top: 0; z-index: 2; min-height: 60px; background: var(--card); border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; z-index: 4; min-height: 60px; background: var(--card); border-bottom: 1px solid var(--line);
   padding: 12px max(32px, calc((100% - 1376px) / 2)); display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px;
 }
+.bar label { color: var(--text-2); }
+.add { display: flex; align-items: center; gap: 8px; flex: 1 1 320px; max-width: 520px; margin: 0; }
+.add input { flex: 1; min-width: 0; }
+.status { display: flex; align-items: center; gap: 8px; margin-left: auto; min-height: 36px; color: var(--text-2); }
+.lamp { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--muted); flex: none; }
+.lamp.armed { border-color: var(--tally); }
+.lamp.on { background: var(--tally); border-color: var(--tally); animation: tally 1.6s ease-in-out infinite; }
+@keyframes tally { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .lamp.on { animation: none; } }
+.notice { flex-basis: 100%; margin: 0; color: var(--tally); font-weight: 500; }
+.notice:empty { display: none; }
 .offline main { display: none; }
 .gate { max-width: 624px; margin: 96px auto; padding: 0 32px; }
 .gate h2 { font-size: 20px; line-height: 24px; margin-bottom: 12px; }
 .gate p { margin: 0 0 8px; color: var(--text-2); }
 .gate code { font: 13px/20px var(--mono); color: var(--text); background: var(--raised); padding: 2px 4px; border-radius: 4px; }
-.bar label { color: var(--text-2); }
-.channel { display: flex; align-items: center; gap: 8px; flex: 1 1 260px; max-width: 400px; }
-.channel input { flex: 1; min-width: 0; }
-.status { display: flex; align-items: center; gap: 8px; margin-left: auto; min-height: 36px; color: var(--text-2); }
-.lamp { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--muted); flex: none; }
-.running .lamp { background: var(--tally); border-color: var(--tally); animation: tally 1.6s ease-in-out infinite; }
-.running .status { color: var(--text); }
-@keyframes tally { 50% { opacity: 0.35; } }
-@media (prefers-reduced-motion: reduce) { .running .lamp { animation: none; } }
-.notice { flex-basis: 100%; margin: 0; color: var(--tally); font-weight: 500; }
-.notice:empty { display: none; }
 
 input[type="text"], select {
   height: 36px; width: 100%; padding: 0 12px; background: var(--card); border: 1px solid var(--line-strong); border-radius: 8px;
@@ -69,15 +69,69 @@ button:disabled { color: var(--muted); cursor: default; }
 button.go { background: var(--fill); border-color: var(--fill); color: var(--on-fill); font-weight: 500; }
 button.go:hover:not(:disabled) { background: var(--fill-hover); border-color: var(--fill-hover); }
 button.go:disabled { background: var(--raised); border-color: var(--line); color: var(--muted); }
-.running button.halt:not(:disabled) { background: var(--tally); border-color: var(--tally); color: var(--on-tally); font-weight: 500; }
+button.halt { background: var(--tally); border-color: var(--tally); color: var(--on-tally); font-weight: 500; }
+button.halt:hover:not(:disabled) { background: var(--tally); }
 
-main {
-  max-width: 1440px; margin: 0 auto; padding: 32px;
-  display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 48px; align-items: start;
+main { max-width: 1440px; margin: 0 auto; padding: 32px; display: grid; gap: 40px; }
+.head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 16px; margin-bottom: 12px; }
+.tools { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.streams { border-top: 1px solid var(--line); }
+.stream {
+  display: grid; grid-template-columns: minmax(160px, 1fr) 264px minmax(120px, 244px) 176px 104px auto;
+  gap: 8px 24px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line);
 }
-.tools { display: flex; flex-wrap: wrap; gap: 8px; padding-bottom: 24px; }
+.who { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.who div { min-width: 0; }
+.name { font: 500 16px/20px var(--display); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sub { color: var(--text-2); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.figures { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.figure span, .tune label { display: block; color: var(--muted); font-size: 12px; line-height: 16px; }
+.figure strong { display: block; font: 500 24px/28px var(--display); font-variant-numeric: tabular-nums; }
+.figure.hot strong { color: var(--tally); }
+.chart { position: relative; height: 40px; display: flex; align-items: flex-end; justify-content: flex-end; gap: 1px; overflow: hidden; }
+.chart i { flex: 0 0 3px; min-height: 1px; background: var(--muted); opacity: 0.5; }
+.chart i.hit { background: var(--tally); opacity: 1; }
+.chart .mark { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--line-strong); }
+.idle .chart, .idle .figures { opacity: 0.45; }
+.tune { display: grid; grid-template-columns: 96px 64px; gap: 8px; }
+.stream input[type="text"] { height: 32px; padding: 0 8px; }
+.made { color: var(--text-2); font-size: 13px; }
+.made strong { display: block; color: var(--text); font-weight: 500; font-size: 14px; }
+.acts { display: flex; gap: 8px; justify-content: flex-end; }
+.stream button { height: 32px; padding: 0 12px; min-width: 76px; }
+.empty { margin: 0; padding: 24px 0; color: var(--text-2); border-bottom: 1px solid var(--line); max-width: 72ch; }
+.find { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 16px; }
+.find label { color: var(--text-2); }
+.find select { width: 104px; }
+.find #category { flex: 1 1 200px; max-width: 320px; width: auto; }
+.find #category-other { flex: 1 1 180px; max-width: 280px; }
+.find #count { width: 56px; }
+.find .help { flex-basis: 100%; max-width: none; margin: 0; }
+.find .help:empty { display: none; }
+.found { margin: 0 0 16px; padding: 16px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+.found .head { margin-bottom: 8px; }
+.result { display: grid; grid-template-columns: minmax(120px, 200px) 88px minmax(0, 1fr) auto; gap: 16px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+.result .name { font-size: 14px; }
+.result .viewers { font-variant-numeric: tabular-nums; text-align: right; }
+.result .title { color: var(--text-2); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.result .placed { color: var(--muted); font-size: 13px; }
+.result button { height: 32px; padding: 0 12px; }
+
+#log {
+  margin: 0; height: 220px; overflow: auto; padding: 12px; background: var(--card);
+  border: 1px solid var(--line); border-radius: 12px; font: 12px/18px var(--mono); white-space: pre-wrap; word-break: break-word;
+}
+#log:empty::before { content: "Spikes, saved clips and problems of every stream show up here"; color: var(--muted); font-family: var(--body); }
+
+details > summary { cursor: pointer; display: flex; align-items: baseline; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); }
+details > summary h2 { display: inline; }
+details > summary span { color: var(--text-2); font-size: 13px; }
+.inside { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 48px; align-items: start; padding-top: 16px; }
 .settings section { padding: 24px 0; border-top: 1px solid var(--line); }
+.settings section h2 { margin-bottom: 16px; }
 .fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 20px 24px; }
+.field { position: relative; }
 .field label { display: block; font-weight: 500; margin-bottom: 4px; }
 .field.check label { display: flex; align-items: center; gap: 8px; min-height: 36px; margin: 0; }
 .field.wide { grid-column: 1 / -1; }
@@ -87,15 +141,14 @@ main {
 .unit { color: var(--muted); font: 12px/16px var(--mono); }
 .help { margin: 4px 0 0; color: var(--text-2); font-size: 13px; max-width: 44ch; }
 .help::first-letter { text-transform: uppercase; }
-.field { position: relative; }
 .tip {
   position: absolute; z-index: 3; left: 0; top: calc(100% + 8px); width: min(320px, 100vw - 32px); margin: 0; padding: 12px;
   background: var(--fill); color: var(--on-fill); border-radius: 8px; font-size: 13px; pointer-events: none;
   opacity: 0; visibility: hidden; transition: opacity 180ms var(--ease), visibility 180ms var(--ease);
 }
 .field:hover .tip, .field:focus-within .tip { opacity: 1; visibility: visible; transition-delay: 350ms; }
-
-aside { position: sticky; top: 92px; display: grid; gap: 32px; }
+aside { position: sticky; top: 92px; }
+aside h2 { margin-bottom: 16px; }
 .stage { display: flex; gap: 16px; align-items: center; }
 .frame {
   flex: none; display: flex; flex-direction: column; overflow: hidden;
@@ -105,18 +158,26 @@ aside { position: sticky; top: 92px; display: grid; gap: 32px; }
 .frame .cam { background: var(--cam); color: var(--on-cam); font-weight: 500; }
 .caption { margin: 0; color: var(--text-2); font-size: 13px; }
 .caption strong { display: block; margin-bottom: 4px; color: var(--text); font: 500 20px/24px var(--display); font-variant-numeric: tabular-nums; }
-#log {
-  margin: 0; height: 320px; overflow: auto; padding: 12px; background: var(--card);
-  border: 1px solid var(--line); border-radius: 12px; font: 12px/18px var(--mono); white-space: pre-wrap; word-break: break-word;
-}
-#log:empty::before { content: "Nothing yet - enter a channel and start watching"; color: var(--muted); font-family: var(--body); }
 
-@media (max-width: 860px) {
-  main { grid-template-columns: minmax(0, 1fr); padding: 16px; gap: 24px; }
+@media (max-width: 1100px) {
+  .stream { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "who acts" "figures chart" "tune made"; gap: 12px 16px; }
+  .who { grid-area: who; } .acts { grid-area: acts; } .figures { grid-area: figures; } .chart { grid-area: chart; }
+  .tune { grid-area: tune; } .made { grid-area: made; text-align: right; }
+  .inside { grid-template-columns: minmax(0, 1fr); gap: 24px; }
   aside { position: static; }
+}
+@media (max-width: 860px) {
+  main { padding: 16px; gap: 32px; }
   .bar { padding: 12px 16px; position: static; }
   .status { margin-left: 0; }
-  #log { height: 260px; }
+}
+@media (max-width: 560px) {
+  .result { grid-template-columns: minmax(0, 1fr) auto; }
+  .result .title { grid-column: 1 / -1; grid-row: 2; }
+  .result .viewers { text-align: left; }
+  .stream { grid-template-columns: minmax(0, 1fr); grid-template-areas: "who" "figures" "chart" "tune" "made" "acts"; }
+  .made { text-align: left; } .acts { justify-content: flex-start; }
+  .chart:empty { display: none; }
 }
 </style>
 <script>
@@ -142,13 +203,12 @@ aside { position: sticky; top: 92px; display: grid; gap: 32px; }
 <body>
 <header class="bar" id="bar">
   <h1>clip-watcher</h1>
-  <div class="channel">
-    <label for="channel">Channel</label>
-    <input type="text" id="channel" autocomplete="off" spellcheck="false" placeholder="Name or twitch.tv / kick.com link">
-  </div>
-  <button class="go" id="start">Start watching</button>
-  <button class="halt" id="stop" disabled>Stop</button>
-  <div class="status" role="status"><span class="lamp"></span><span id="status">Not recording</span></div>
+  <form class="add" id="add">
+    <label for="channel">Add stream</label>
+    <input type="text" id="channel" autocomplete="off" spellcheck="false" placeholder="Names or twitch.tv / kick.com links">
+    <button class="go" type="submit">Add</button>
+  </form>
+  <div class="status" role="status"><span class="lamp" id="lamp"></span><span id="status">Nothing running</span></div>
   <button id="theme" aria-label="Colour theme"></button>
   <p class="notice" id="notice" role="alert"></p>
 </header>
@@ -158,36 +218,72 @@ aside { position: sticky; top: 92px; display: grid; gap: 32px; }
   <p>On Windows, double-click <code>watch.bat</code> in the clip-watcher folder. On Linux or macOS, run <code>./watch.sh</code>. Keep the window it opens; closing it stops clip-watcher.</p>
 </div>
 <main>
-  <div class="settings">
-    <div class="tools">
-      <button id="save">Save preset</button>
-      <button id="load">Load preset</button>
-      <button id="reset">Reset to defaults</button>
-      <button id="clips">Open clips folder</button>
-      <input type="file" id="file" accept=".txt,text/plain" hidden>
-    </div>
-    <div id="form"></div>
-  </div>
-  <aside>
-    <section>
-      <h2>Clip layout</h2>
-      <div class="stage">
-        <div class="frame" id="frame" aria-hidden="true"></div>
-        <p class="caption" id="caption"></p>
+  <section>
+    <div class="head">
+      <h2>Streams</h2>
+      <div class="tools">
+        <button id="start-all">Start all</button>
+        <button id="stop-all">Stop all</button>
+        <button id="clips">Open clips folder</button>
       </div>
-    </section>
-    <section>
-      <h2>Log</h2>
-      <pre id="log" role="log" aria-live="polite" tabindex="0"></pre>
-    </section>
-  </aside>
+    </div>
+    <form class="find" id="find">
+      <label for="category">Who is live in</label>
+      <select id="category"></select>
+      <input type="text" id="category-other" autocomplete="off" spellcheck="false" aria-label="Category name"
+             placeholder="Category, for example Just Chatting" hidden>
+      <label for="site">on</label>
+      <select id="site"><option value="twitch">Twitch</option><option value="kick">Kick</option></select>
+      <label for="count">top</label>
+      <input type="text" id="count" inputmode="numeric" value="5" autocomplete="off">
+      <button type="submit" id="find-go">Find</button>
+      <p class="help" id="category-hint"></p>
+    </form>
+    <div class="found" id="found" hidden>
+      <div class="head">
+        <h2 id="found-title" tabindex="-1"></h2>
+        <div class="tools">
+          <button class="go" id="found-all">Add all and start</button>
+          <button id="found-close">Close</button>
+        </div>
+      </div>
+      <div id="found-list"></div>
+    </div>
+    <div class="streams" id="streams"></div>
+    <p class="empty" id="empty">No streams yet. Add a channel in the bar above. Every stream gets its own row with its own minimum, its own start and stop, and its chat counted live.</p>
+  </section>
+  <section>
+    <div class="head"><h2>Log</h2></div>
+    <pre id="log" role="log" aria-live="polite" tabindex="0"></pre>
+  </section>
+  <details class="settings" id="settings">
+    <summary><h2>Settings for every stream</h2><span>used by a stream from its next start</span></summary>
+    <div class="inside">
+      <div>
+        <div class="tools">
+          <button id="save">Save preset</button>
+          <button id="load">Load preset</button>
+          <button id="reset">Reset to defaults</button>
+          <input type="file" id="file" accept=".txt,text/plain" hidden>
+        </div>
+        <div id="form"></div>
+      </div>
+      <aside>
+        <h2>Clip layout</h2>
+        <div class="stage">
+          <div class="frame" id="frame" aria-hidden="true"></div>
+          <p class="caption" id="caption"></p>
+        </div>
+      </aside>
+    </div>
+  </details>
 </main>
 <script>
 const $ = id => document.getElementById(id);
 const token = "__TOKEN__";  // filled in by gui.py when it serves this page
 const HELPER = "http://127.0.0.1:8791/";
-const fields = {};
-let next = 0;
+const fields = {}, rows = new Map();
+let next = 0, saving = 0;
 
 async function api(path, body) {
   const response = await fetch(path, {
@@ -205,6 +301,8 @@ function el(tag, props, ...children) {
   node.append(...children);
   return node;
 }
+
+// ---- settings shared by every stream ----
 
 function build(groups) {
   for (const group of groups) {
@@ -227,7 +325,7 @@ function build(groups) {
         field = el("div", {className: "field" + size}, el("label", {htmlFor: id}, opt.label), control);
       }
       input.setAttribute("aria-describedby", helpId + " t" + opt.flag);
-      input.addEventListener("input", preview);
+      input.addEventListener("input", () => { preview(); remember(); });
       field.append(el("p", {className: "help", id: helpId}, opt.help));
       if (opt.detail) field.append(el("p", {className: "tip", id: "t" + opt.flag, role: "tooltip"}, opt.detail));
       grid.append(field);
@@ -260,14 +358,18 @@ function args() {
   }
   return out;
 }
-function apply(lines, keepChannel) {
+function apply(lines) {
   reset();
   for (const line of lines.map(l => l.trim()).filter(Boolean)) {
     const cut = line.indexOf("="), flag = cut < 0 ? line : line.slice(0, cut);
     if (fields[flag]) write(flag, cut < 0 ? true : line.slice(cut + 1));
-    else if (!line.startsWith("-") && !keepChannel) $("channel").value = line;
   }
   preview();
+}
+// the settings are kept by gui.py so they are still here after a restart
+function remember() {
+  clearTimeout(saving);
+  saving = setTimeout(() => api("/api/shared", {args: args()}).catch(() => {}), 800);
 }
 
 function preview() {
@@ -302,19 +404,115 @@ function preview() {
   );
 }
 
+// ---- the board: one row per stream ----
+
+const span = seconds => seconds < 90 ? `${seconds} s` : seconds < 5400 ? `${Math.round(seconds / 60)} min`
+  : `${Math.floor(seconds / 3600)} h ${String(Math.round(seconds % 3600 / 60)).padStart(2, "0")} min`;
+
+function addRow(stream) {
+  const figure = label => {
+    const value = el("strong", {}, "-");
+    return {value, node: el("div", {className: "figure"}, el("span", {}, label), value)};
+  };
+  const tuner = (label, value) => {
+    const id = `${label}-${stream.id}`, input = el("input", {type: "text", id, inputMode: "decimal", autocomplete: "off"});
+    input.value = value;
+    input.onchange = () => act("/api/tune", {id: stream.id, min: r.min.value.trim(), factor: r.factor.value.trim()});
+    return {input, node: el("div", {}, el("label", {htmlFor: id}, label), input)};
+  };
+  const msgs = figure("Msgs"), median = figure("Median"), threshold = figure("Threshold");
+  const min = tuner("Minimum", stream.min), factor = tuner("Multiplier", stream.factor);
+  const r = {
+    lamp: el("span", {className: "lamp"}), sub: el("div", {className: "sub"}),
+    msgs, median, threshold, min: min.input, factor: factor.input,
+    chart: el("div", {className: "chart", role: "img"}), made: el("div", {className: "made"}),
+    toggle: el("button", {}), remove: el("button", {}, "Remove"),
+  };
+  // a stream that is already stopping can be told to quit at once. That is the only request that drops clips,
+  // so it is asked first; the question also catches the second click of a double-click on Stop
+  r.toggle.onclick = () => !r.running ? act("/api/start", {id: stream.id, args: args()})
+    : !r.stopping ? act("/api/stop", {id: stream.id})
+    : confirm(`Quit ${stream.channel} now? The clips it is still finishing are dropped.`) && act("/api/stop", {id: stream.id, force: true});
+  r.remove.onclick = () => act("/api/remove", {id: stream.id});
+  r.root = el("div", {className: "stream"},
+    el("div", {className: "who"}, r.lamp, el("div", {}, el("div", {className: "name"}, stream.channel), r.sub)),
+    el("div", {className: "figures"}, msgs.node, median.node, threshold.node),
+    r.chart,
+    el("div", {className: "tune"}, min.node, factor.node),
+    r.made,
+    el("div", {className: "acts"}, r.toggle, r.remove));
+  $("streams").append(r.root);
+  rows.set(stream.id, r);
+  return r;
+}
+
+function paint(r, s) {
+  const stats = s.running ? s.stats : null, video = Boolean(stats && stats.video);
+  r.running = s.running;
+  r.stopping = s.stopping;
+  r.lamp.className = "lamp" + (video ? " on" : s.running ? " armed" : "");
+  r.root.classList.toggle("idle", !s.running);
+  const site = s.kick ? "Kick" : "Twitch";
+  r.sub.textContent = site + " - " + (
+    !s.running ? (s.exit ? "stopped by an error, see the log" : "not running")
+    : s.stopping ? "stopping, finishing its clips"
+    : !stats ? "starting"
+    : !video ? "waiting for the stream"
+    : stats.phase === "chat not counted" ? "recording, chat is reconnecting"
+    : stats.phase === "warming up" ? "recording, learning the usual chat"
+    : "recording for " + span(stats.elapsed));
+  r.msgs.value.textContent = stats ? stats.msgs : "-";
+  r.median.value.textContent = stats && stats.median !== null ? stats.median : "-";
+  r.threshold.value.textContent = stats && stats.threshold !== null ? stats.threshold : "-";
+  r.msgs.node.classList.toggle("hot", Boolean(stats && stats.threshold !== null && stats.msgs >= stats.threshold));
+  for (const [input, value] of [[r.min, s.min], [r.factor, s.factor]]) {
+    if (document.activeElement !== input && input.value !== String(value)) input.value = value;
+  }
+  // the chart: chat per count, newest on the right, red where it reached the threshold of that moment
+  const history = s.history, last = history.length ? history[history.length - 1] : null;
+  // the scale follows chat; a threshold far above it sits at the top edge instead of flattening the bars
+  const peak = Math.max(1, ...history.map(([count]) => count)), line = last && last[1] !== null ? last[1] : 0;
+  const top = Math.max(peak, Math.min(line, peak * 3)) * 1.1;
+  r.chart.replaceChildren(...history.map(([count, need]) => {
+    const bar = el("i", {className: need !== null && count >= need ? "hit" : ""});
+    bar.style.height = Math.max(2, count / top * 100) + "%";
+    return bar;
+  }));
+  if (line) {
+    const mark = el("span", {className: "mark"});
+    mark.style.bottom = line > top ? "calc(100% - 1px)" : line / top * 100 + "%";
+    r.chart.append(mark);
+  }
+  r.chart.setAttribute("aria-label", last
+    ? `Chat per count over the last ${history.length} counts; latest ${last[0]}` + (last[1] !== null ? `, threshold ${last[1]}` : "")
+    : "No chat counted yet");
+  const when = /_(\d\d)(\d\d)(\d\d)\.mp4$/.exec(s.last);
+  r.made.replaceChildren(el("strong", {}, s.clips === 1 ? "1 clip" : `${s.clips} clips`),
+    when ? `last ${when[1]}:${when[2]}:${when[3]}` : "none saved yet");
+  r.toggle.textContent = !s.running ? "Start" : s.stopping ? "Quit now" : "Stop";
+  r.toggle.className = s.running && !s.stopping ? "halt" : s.running ? "" : "go";
+  r.toggle.title = s.stopping ? "Quit this stream at once and drop the clips it is still finishing" : "";
+  r.remove.disabled = s.running;
+}
+
 function show(state) {
   const log = $("log"), pinned = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
-  for (const line of state.lines) log.append(line + "\n");
+  // the poll and an action can be answered with the same lines; only those not shown yet are added
+  const fresh = state.lines.slice(Math.max(0, state.lines.length - Math.max(0, state.next - next)));
+  for (const line of fresh) log.append(line + "\n");
   while (log.childNodes.length > 2000) log.firstChild.remove();
-  if (pinned && state.lines.length) log.scrollTop = log.scrollHeight;
-  next = state.next;
-  $("bar").classList.toggle("running", state.running);
-  $("start").disabled = state.running;
-  $("stop").disabled = !state.running || state.stopping;
-  $("status").textContent = state.stopping ? "Stopping - finishing clips in progress"
-    : state.running ? "Recording"
-    : state.exit ? "Stopped with an error - see the log"
-    : "Not recording";
+  if (pinned && fresh.length) log.scrollTop = log.scrollHeight;
+  next = Math.max(next, state.next);
+  const seen = new Set(state.streams.map(s => s.id));
+  for (const [id, r] of rows) if (!seen.has(id)) { r.root.remove(); rows.delete(id); }
+  for (const s of state.streams) paint(rows.get(s.id) || addRow(s), s);
+  $("empty").hidden = state.streams.length > 0;
+  const running = state.streams.filter(s => s.running), recording = running.filter(s => s.stats && s.stats.video);
+  $("lamp").className = "lamp" + (recording.length ? " on" : running.length ? " armed" : "");
+  $("status").textContent = !running.length ? "Nothing running"
+    : `${recording.length} recording` + (running.length > recording.length ? `, ${running.length - recording.length} waiting` : "");
+  $("start-all").disabled = !state.streams.some(s => !s.running);
+  $("stop-all").disabled = !running.length;
 }
 async function poll() {
   try {
@@ -330,20 +528,112 @@ async function act(path, body) {
   try {
     await api(path, body);
     show(await api("/api/state?since=" + next));
+    return true;
   } catch (error) {
     $("notice").textContent = error.message;
+    return false;
   }
 }
 
-$("start").onclick = () => {
-  const channel = $("channel").value.trim();
-  if (!channel) { $("notice").textContent = "Enter a channel name or link first"; $("channel").focus(); return; }
-  act("/api/start", {channel, args: args()});
+$("add").onsubmit = async event => {
+  event.preventDefault();
+  const channels = $("channel").value.trim();
+  if (!channels) { $("notice").textContent = "Enter a channel name or link first"; $("channel").focus(); return; }
+  if (await act("/api/add", {channels, min: read("--min"), factor: read("--factor"), kick: read("--kick")})) $("channel").value = "";
 };
-$("channel").onkeydown = event => { if (event.key === "Enter") $("start").click(); };
-$("stop").onclick = () => act("/api/stop", {});
+// streams found in a category: put them on the board with the current defaults and start them
+async function take(streams) {
+  const problems = [];
+  const attempt = (path, body) => api(path, body).catch(error => { problems.push(error.message); });
+  const refresh = async () => { const state = await attempt("/api/state?since=" + next); if (state) show(state); };
+  const fresh = streams.filter(f => !rows.has(f.id));
+  // the board may take only some of them (it has a limit); every one that got a row is still started
+  if (fresh.length) await attempt("/api/add", {channels: fresh.map(f => f.link).join(" "), min: read("--min"), factor: read("--factor")});
+  await refresh();
+  for (const f of streams) {
+    const r = rows.get(f.id);
+    if (r && !r.running) await attempt("/api/start", {id: f.id, args: args()});
+  }
+  await refresh();
+  $("notice").textContent = [...new Set(problems)].join(" ");
+  listFound();
+}
+let found = [];
+function listFound() {
+  const within = $("found").contains(document.activeElement);
+  $("found-list").replaceChildren(...found.map(f => el("div", {className: "result"},
+    el("div", {className: "name"}, f.channel),
+    el("div", {className: "viewers"}, f.viewers.toLocaleString("en-US")),
+    el("div", {className: "title", title: f.title}, f.title),
+    rows.has(f.id) ? el("span", {className: "placed"}, "on the board")
+      : el("button", {onclick: () => take([f])}, "Add and start"))));
+  $("found-all").disabled = found.every(f => rows.has(f.id));
+  // the button that was just used is gone or switched off; keyboard focus stays in the list
+  if (within && (!$("found").contains(document.activeElement) || document.activeElement.disabled)) {
+    ($("found-list").querySelector("button") || $("found-close")).focus();
+  }
+}
+// the category dropdown: the site's most watched categories right now, and a way to type any other one
+const OTHER = "(another)";
+let listing = 0;  // only the newest request may fill the dropdown
+async function loadCategories() {
+  const select = $("category"), ticket = ++listing;
+  const other = () => el("option", {value: OTHER}, "Another category...");
+  // the list can take a while (Kick's is added up from every live channel), so typing a name works meanwhile,
+  // and a name already being typed stays
+  const typed = select.value === OTHER && $("category-other").value.trim() !== "";
+  select.replaceChildren(el("option", {value: ""}, "Loading the list"), other());
+  if (typed) select.value = OTHER;
+  $("category-other").hidden = !typed;
+  let names = [], problem = "";
+  $("category-hint").textContent = "";
+  try {
+    names = (await api("/api/categories?site=" + $("site").value)).categories;
+  } catch (error) {
+    problem = "No list of categories yet. " + error.message;
+  }
+  if (ticket !== listing) return;  // the site was changed while this was on its way
+  $("category-hint").textContent = problem;
+  const typing = select.value === OTHER;
+  select.replaceChildren(...names.map(name => el("option", {value: name}, name)), other());
+  select.value = names.length && !typing ? names[0] : OTHER;
+  $("category-other").hidden = select.value !== OTHER;
+}
+$("category").onchange = () => {
+  $("category-other").hidden = $("category").value !== OTHER;
+  if (!$("category-other").hidden) $("category-other").focus();
+};
+$("site").onchange = loadCategories;
+let finding = 0;  // only the newest lookup may fill the list
+$("find").onsubmit = async event => {
+  event.preventDefault();
+  const ticket = ++finding;
+  $("notice").textContent = "";
+  $("find-go").textContent = "Finding";
+  try {
+    const category = $("category").value === OTHER ? $("category-other").value : $("category").value;
+    const data = await api("/api/find", {category, site: $("site").value, count: $("count").value});
+    if (ticket !== finding) return;
+    found = data.streams;
+    $("found-title").textContent = found.length
+      ? `Live in ${data.category} on ${data.site === "kick" ? "Kick" : "Twitch"}, most watched first`
+      : `Nobody is live in ${data.category} right now`;
+    listFound();
+    $("found").hidden = false;
+    // a screen reader says the result and Tab goes on into the list; someone who moved on meanwhile is left alone
+    if ($("find").contains(document.activeElement)) $("found-title").focus();
+  } catch (error) {
+    if (ticket === finding) $("notice").textContent = error.message;
+  } finally {
+    if (ticket === finding) $("find-go").textContent = "Find";
+  }
+};
+$("found-all").onclick = () => take(found);
+$("found-close").onclick = () => { $("found").hidden = true; };
+$("start-all").onclick = () => act("/api/start-all", {args: args()});
+$("stop-all").onclick = () => act("/api/stop-all", {});
 $("clips").onclick = () => act("/api/open-clips", {});
-$("reset").onclick = reset;
+$("reset").onclick = () => { reset(); remember(); };
 $("save").onclick = () => {
   const link = el("a", {download: "preset.txt", href: URL.createObjectURL(new Blob([args().map(a => a + "\n").join("")], {type: "text/plain"}))});
   link.click();
@@ -356,11 +646,13 @@ nameTheme();
 $("load").onclick = () => $("file").click();
 $("file").onchange = async event => {
   const file = event.target.files[0];
-  if (file) apply((await file.text()).split(/\r?\n/), true);
+  if (file) { apply((await file.text()).split(/\r?\n/)); remember(); }
   event.target.value = "";
 };
+try { $("settings").open = localStorage.getItem("settings") === "open"; } catch (error) {}
+$("settings").ontoggle = () => { try { localStorage.setItem("settings", $("settings").open ? "open" : "shut"); } catch (error) {} };
 
-// nothing on the page works without gui.py behind it, so say how to start it instead of showing a dead form
+// nothing on the page works without gui.py behind it, so say how to start it instead of showing a dead board
 function offline(title, text) {
   document.body.classList.add("offline");
   for (const control of document.querySelectorAll(".bar button:not(#theme), #channel")) control.disabled = true;
@@ -377,10 +669,15 @@ if (location.protocol === "file:") {
                   "This page is only the control panel. A browser page cannot start a recording by itself, so clip-watcher has to be running first. Once it is, this file opens straight into it.")
   );
 } else {
-  api("/api/options").then(({groups, last}) => {
+  api("/api/options").then(({groups, shared, board}) => {
+    if (!board) {
+      offline("clip-watcher was updated", "The copy that is running is older than this page. Close its window and start it again.");
+      return;
+    }
     build(groups);
-    apply(last);
+    apply(shared);
     poll();
+    loadCategories();
   }).catch(error => offline("This page lost its connection", error.message));
 }
 </script>
