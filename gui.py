@@ -133,7 +133,7 @@ def make_server(port=0):
             local = self.headers.get("Host", "") in (f"127.0.0.1:{self.server.server_port}",
                                                      f"localhost:{self.server.server_port}")
             if not local or not secrets.compare_digest(self.headers.get("X-Token", ""), token):
-                self.reply(403, {"error": "Open the page from the link gui.py printed."})
+                self.reply(403, {"error": "This link is out of date. Use the page watch.bat or ./watch.sh just opened"})
                 return False
             return True
 

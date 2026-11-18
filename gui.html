@@ -34,8 +34,10 @@ button, input, select { font: inherit; color: inherit; }
 
 .bar {
   position: sticky; top: 0; z-index: 2; min-height: 60px; background: var(--card); border-bottom: 1px solid var(--line);
-  padding: 12px 32px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px;
+  padding: 12px max(32px, calc((100% - 1376px) / 2)); display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px;
 }
+.offline main { display: none; }
+.offline .notice { color: var(--text); font-weight: 400; max-width: 72ch; padding: 4px 0 8px; }
 .bar label { color: var(--text-2); }
 .channel { display: flex; align-items: center; gap: 8px; flex: 1 1 260px; max-width: 400px; }
 .channel input { flex: 1; min-width: 0; }
@@ -151,12 +153,14 @@ const token = new URLSearchParams(location.search).get("t") || "";
 const fields = {};
 let next = 0;
 
+const RESTART = "Double-click watch.bat on Windows, or run ./watch.sh, and use the page it opens";
+
 async function api(path, body) {
   const response = await fetch(path, {
     method: body ? "POST" : "GET",
     headers: body ? {"X-Token": token, "Content-Type": "application/json"} : {"X-Token": token},
     body: body ? JSON.stringify(body) : undefined,
-  });
+  }).catch(() => { throw new Error("The clip-watcher helper is not running. " + RESTART); });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || response.statusText);
   return data;
@@ -281,7 +285,8 @@ async function poll() {
   try {
     show(await api("/api/state?since=" + next));
   } catch (error) {
-    $("status").textContent = "Lost contact with gui.py - is it still running?";
+    $("status").textContent = "Not connected";
+    $("notice").textContent = error.message;
   }
   setTimeout(poll, 1000);
 }
@@ -316,11 +321,22 @@ $("file").onchange = async event => {
   event.target.value = "";
 };
 
-api("/api/options").then(({groups, last}) => {
-  build(groups);
-  apply(last);
-  poll();
-}).catch(error => { $("notice").textContent = error.message; });
+// nothing on the page works without gui.py behind it, so say how to start it instead of showing a dead form
+function offline(message) {
+  document.body.classList.add("offline");
+  for (const button of document.querySelectorAll("button, #channel")) button.disabled = true;
+  $("status").textContent = "Not connected";
+  $("notice").textContent = message;
+}
+if (location.protocol === "file:") {
+  offline("This file cannot record on its own: a browser page is not allowed to start programs. " + RESTART);
+} else {
+  api("/api/options").then(({groups, last}) => {
+    build(groups);
+    apply(last);
+    poll();
+  }).catch(error => offline(error.message));
+}
 </script>
 </body>
 </html>
