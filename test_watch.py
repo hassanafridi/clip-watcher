@@ -8,6 +8,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections import deque
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -516,7 +517,7 @@ def run_clip(answer, lag=0, fail=None, probe="1.5\n1.5,34.5\n", speech=None, **o
     args = SimpleNamespace(before=20, after=10, jobs=1, crf=23, model="tiny", language=None, upload=False,
                            ratio=9 / 16, height=1920, face_share=1 / 3, face_zoom=4, big_face=BIG_FACE, cam="top",
                            cam_box=None, game_box=None, cam_share=None, captions="off", caption_size=6, hook="", hook_secs=3, zoom=0, tag=None,
-                           logo=None, intro=None, outro=None)
+                           logo=None, intro=None, outro=None, promo=None, chat_box="left", chat_lines=7)
     vars(args).update(own)
     try:
         out = watcher.CLIPS / "chan_20260101_000000.mp4"
@@ -583,6 +584,15 @@ with tempfile.TemporaryDirectory() as folder:
     assert "[1:v]" in graph and "[2:v]" in graph and "[3:v]" not in graph, "intro is input 1, outro input 2"
     assert (Path(folder) / "clips" / "chan_20260101_000000.srt").exists() and said[-1].endswith(".srt")
     assert not list(Path(folder).glob("chan_20260101_000000.*")), "no working files are left"
+    # the real chat of the moment goes into a box, and a promo plays before the intro
+    watcher.CHAT_LOG["twitch.tv/chan"] = deque([(1_000_000 - 40, "early", "too early"), (1_000_000 - 5, "fan", "LETS GO"),
+                                               (1_000_000 + 1, "other", "no way {x}")])
+    run_clip((segment, 36, 34, 1_000_000 - 24), promo=str(extra), intro=str(extra))
+    encode = next(c for c in ran if "libx264" in c)
+    graph = encode[encode.index("-filter_complex") + 1]
+    assert "ass=" in graph, "the chat box is burned in"
+    assert graph.endswith("[vpromo][apromo][vintro][aintro][vm][am]concat=n=3:v=1:a=1[v][a]"), graph[-120:]
+    del watcher.CHAT_LOG["twitch.tv/chan"]
     run_clip((segment, 36, 34, 1_000_000 - 24), speech=False, captions="burn", hook="{text}")
     graph = next(c for c in ran if "libx264" in c)
     graph = graph[graph.index("-filter_complex") + 1]
@@ -600,6 +610,28 @@ with tempfile.TemporaryDirectory() as folder:
 
     holder, waited, out = run_clip((segment, 36, 34, 1_000_000 - 24), fail="copy")
     assert holder.released == [(segment, True)] and watcher.backlog == 0 and "failed" in said[-1]
+
+# the chat box: lines in the order they came, the newest at the bottom, the box never longer than asked
+box_o = SimpleNamespace(width=1080, height=1920, chat_box="left", chat_lines=2)
+ass = watcher.chat_box([(103.0, "b", "second"), (100.0, "a", r"first {x} \ y"), (103.02, "c", "third"),
+                        (110.0, "d", "a" * 80)], 100.0, 30, box_o)
+events = [line for line in ass.splitlines() if line.startswith("Dialogue")]
+assert len(events) == 3, events  # b and c landed together and show up together
+assert events[0].startswith("Dialogue: 0,0:00:00.00,0:00:03.00,") and "first (x) / y" in events[0]
+assert "second" in events[1] and "third" in events[1] and "first" not in events[1], "two lines at most"
+assert events[2].endswith("...") and events[2].split(",")[2] == "0:00:30.00", "a long line is cut; the last stays to the end"
+assert r"\an1\pos(43,1229)" in events[0] and "PlayResY: 1920" in ass
+box_o.chat_box = "right"
+assert r"\an3\pos(1037," in watcher.chat_box([(100.0, "a", "x")], 100.0, 30, box_o)
+box_o.chat_box = "off"
+assert watcher.chat_box([(100.0, "a", "x")], 100.0, 30, box_o) is None
+assert watcher.chat_box([], 100.0, 30, SimpleNamespace(chat_box="left")) is None
+# slurs are masked, words that only look alike are not, and chat bots are left out
+masks = [w for w in ("Niggas", "nigga!", "spic", "spicy", "raccoon", "coon", "retarded", "fine") if watcher.masked(w)]
+assert masks == ["Niggas", "nigga!", "spic", "coon", "retarded"], masks
+box_o.chat_box = "left"
+ass = watcher.chat_box([(100.0, "Nightbot", "follow!"), (101.0, "fan", "wake up nigga lol")], 100.0, 30, box_o)
+assert "Nightbot" not in ass and "wake up *** lol" in ass
 
 # --- commands from the board on stdin: quit is still heard after stop ---
 quits = []
@@ -653,6 +685,8 @@ watcher.TWITCH_IRC, watcher.RETRY = real_irc, real_retry
 assert total == 1050, total
 assert state["hello"] == b"NICK justinfan12345\r\nJOIN #test\r\n" and state["pong"] == b"PONG :tmi.twitch.tv\r\n"
 assert blind >= 1 and said.count("chat connected") == 2 and any("chat lost" in line for line in said)
+heard = list(watcher.CHAT_LOG["twitch.tv/test"])
+assert len(heard) == 1050 and heard[0][1:] == ("u", "hi 0") and heard[-1][1:] == ("u", "message number 999"), heard[:2]
 
 
 # --- Kick chat reader: nothing counts until the replay has caught up with the moment it joined ---

@@ -1,0 +1,21 @@
+# Words masked in the chat box of every clip, one per line. Lines starting with # are ignored.
+# A plain word is masked only as a whole word; a word ending in * also masks every word starting with it.
+nigg*
+niga*
+nigga*
+fag
+fags
+fagg*
+faggot*
+retard*
+kike*
+chink*
+tranny*
+trannies
+spic
+spics
+coon
+coons
+beaner*
+wetback*
+gook*

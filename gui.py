@@ -52,7 +52,8 @@ LABELS = {
     "--captions": ("Captions", ""), "--caption-size": ("Caption size", "%"), "--hook": ("Title line", ""),
     "--hook-secs": ("Title line shown for", "s"), "--zoom": ("Zoom at the spike", ""),
     "--tag": ("Channel tag", ""), "--logo": ("Logo image", ""), "--intro": ("Intro video", ""),
-    "--outro": ("Outro video", ""),
+    "--outro": ("Outro video", ""), "--promo": ("Promo video", ""), "--chat-box": ("Chat box", ""),
+    "--chat-lines": ("Chat lines shown", ""),
 }
 # shown when a setting is hovered or focused: what it is for and when to change it
 DETAILS = {
@@ -123,6 +124,11 @@ DETAILS = {
     "--intro": "Path of a short video put in front of every clip. Keep it under 2 seconds: Shorts viewers "
                "swipe away from slow starts.",
     "--outro": "Path of a short video put after every clip, for example asking viewers to follow.",
+    "--promo": "Path of a video put before the intro, for example a sponsor's promo. A paid promotion has to be "
+               "declared on YouTube: tick 'includes paid promotion' for those uploads in YouTube Studio.",
+    "--chat-box": "Shows the real chat of the moment in a box on the left or right of the clip, scrolling the way "
+                  "it came in, so viewers see chat explode. Off leaves it out.",
+    "--chat-lines": "How many chat lines the box holds at once. More lines make a taller box.",
 }
 
 

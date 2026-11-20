@@ -60,6 +60,14 @@ PDEATH = ("import ctypes, os, signal, sys\n"
 STOP = threading.Event()  # set once to wind every channel down
 TUNE = {}  # "min", "factor", "ratio" and "cam_box" changed while running (--stdin-control); they override the command line
 RECORDERS = {}  # channel tag -> its Recorder, for the board's still pictures
+CHAT_LOG = {}  # "twitch.tv/name" or "kick.com/name" -> recent chat lines as (wall-clock time, user, text)
+CHAT_BOTS = {"nightbot", "streamelements", "fossabot", "moobot", "streamlabs", "sery_bot", "botrixoficial",
+             "kofistreambot", "wizebot", "soundalerts"}  # their lines are left out of the chat box
+try:  # words masked in the chat box; chat_filter.txt beside this file, one per line
+    CHAT_FILTER = [w.strip().lower() for w in (HERE / "chat_filter.txt").read_text(encoding="utf-8").splitlines()
+                   if w.strip() and not w.startswith("#")]
+except OSError:
+    CHAT_FILTER = []
 printing, shared = threading.Lock(), threading.Lock()
 children = set()  # every helper program now running, so a forced quit can take them all down
 backlog = 0  # clips of this run cut or about to be, and not finished yet
@@ -216,6 +224,7 @@ def twitch_session(channel):
         if tls:
             sock = ssl.create_default_context().wrap_socket(sock, server_hostname=host)
         sock.sendall(f"NICK justinfan12345\r\nJOIN #{channel}\r\n".encode())
+        said = heard_chat(f"twitch.tv/{channel}")
         sock.settimeout(1)
         buf, heard = b"", time.time()
         while time.time() - heard < 360:  # Twitch pings every ~5 min, longer silence is a dead link
@@ -231,6 +240,9 @@ def twitch_session(channel):
             for line in lines:
                 if line.startswith(b"PING"):
                     sock.sendall(b"PONG" + line[4:] + b"\r\n")
+                elif b" PRIVMSG #" in line and line.startswith(b":") and b"!" in line:
+                    user, _, text = line[1:].decode(errors="replace").partition(" :")
+                    said.append((heard, user.split("!", 1)[0], text))
             yield sum(b" PRIVMSG #" in line for line in lines)
         raise OSError("no data for 6 min")
 
@@ -255,6 +267,7 @@ def kick_session(channel):
     import requests
 
     channel_id = kick_channel_id(channel)
+    said = heard_chat(f"kick.com/{channel}")
     # at most KICK_PAGES x 25 messages per poll; raise KICK_PAGES for chats faster than that
     seen, due, offset, primed, counting_from = deque(maxlen=5000), [], None, False, None
     while True:
@@ -267,13 +280,17 @@ def kick_session(channel):
             data = r.json()["data"]
             fresh = [m for m in data["messages"] if m["id"] not in seen]
             seen.extend(m["id"] for m in fresh)
-            stamps += [datetime.fromisoformat(m["created_at"].replace("Z", "+00:00")).timestamp() for m in fresh]
+            lines = [(datetime.fromisoformat(m["created_at"].replace("Z", "+00:00")).timestamp(),
+                      (m.get("sender") or {}).get("username") or "?",
+                      re.sub(r"\[emote:\d+:([^\]]*)\]", r"\1", m.get("content") or "")) for m in fresh]
+            stamps += [stamp for stamp, _, _ in lines]
             cursor = data.get("cursor")
             if len(fresh) < len(data["messages"]) or not fresh or not cursor:
                 break  # reached messages we already had
         if stamps:
             lag = now - max(stamps)  # smallest value seen = clock difference between Kick and this machine
             offset = lag if offset is None else min(offset, lag)
+            said.extend((stamp + offset, user, text) for stamp, user, text in sorted(lines))
             if primed:
                 due += [stamp + offset + KICK_LAG for stamp in stamps]
         if not primed:  # messages older than this moment were skipped, so the replay is short until it has passed
@@ -284,6 +301,69 @@ def kick_session(channel):
             due = [stamp for stamp in due if stamp > time.time()]
             yield ready if time.time() >= counting_from else None
             time.sleep(1)
+
+
+def heard_chat(source):
+    """The list of recent chat lines kept for a channel, for the chat box of its clips."""
+    return CHAT_LOG.setdefault(source, deque(maxlen=5000))
+
+
+def masked(word):
+    """True when a chat word is on the filter list: whole words, or word starts for entries ending in *."""
+    bare = re.sub(r"[^a-z0-9]", "", word.lower())
+    return any(bare.startswith(bad[:-1]) if bad.endswith("*") else bare == bad for bad in CHAT_FILTER) and bool(bare)
+
+
+def chat_box(lines, begin, length, o, top=0, bottom=0):
+    """ASS subtitles showing the chat of the clip's moment scrolling in a box, the way it came in.
+
+    lines: (wall-clock time, user, text); begin: the wall-clock time the clip starts at. None when there is
+    nothing to show.
+    """
+    if o.chat_box == "off" or not lines:
+        return None
+    W, H = o.width, o.height
+    size = max(12, round(H * 0.02))
+    colours = ["&H004FC2F5&", "&H00C6B34F&", "&H007AD97A&", "&H00F59A6B&", "&H00D07AE0&", "&H004D8CF5&"]
+
+    def clean(text):
+        return re.sub(r"[\x00-\x1f\x7f]", "", text).replace("\\", "/").replace("{", "(").replace("}", ")").strip()
+
+    def entry(user, text):
+        user, text = clean(user)[:14], clean(text)
+        room = max(8, 34 - len(user))
+        text = text if len(text) <= room else text[:room - 3].rstrip() + "..."
+        return f"{{\\c{colours[sum(map(ord, user)) % len(colours)]}}}{user}{{\\c&H00FFFFFF&}}: {text}"
+
+    updates, shown = [], []
+    for when, user, text in sorted(lines):
+        if user.lower() in CHAT_BOTS:
+            continue
+        text = " ".join("***" if masked(word) else word for word in text.split())
+        shown = (shown + [entry(user, text)])[-o.chat_lines:]
+        t = max(0.0, when - begin)
+        if updates and t - updates[-1][0] < 1 / 12:  # lines landing together show up together
+            updates[-1] = (updates[-1][0], shown)
+        else:
+            updates.append((t, shown))
+
+    def stamp(t):
+        return f"{int(t // 3600)}:{int(t % 3600 // 60):02d}:{t % 60:05.2f}"
+
+    left = o.chat_box == "left"
+    x, y = round(W * 0.04) if left else round(W * 0.96), round(min(H * 0.64, H - bottom - H * 0.04))
+    events = [f"Dialogue: 0,{stamp(t)},{stamp(end)},Chat,,0,0,0,,{{\\an{1 if left else 3}\\pos({x},{y})}}"
+              + "\\N".join(text)
+              for (t, text), end in zip(updates, [u[0] for u in updates[1:]] + [length]) if end > t]
+    return "\n".join([
+        "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {W}", f"PlayResY: {H}", "WrapStyle: 2",
+        "ScaledBorderAndShadow: yes", "", "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, "
+        "Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, "
+        "MarginR, MarginV, Encoding",
+        f"Style: Chat,Arial,{size},&H00FFFFFF,&H00FFFFFF,&H64000000,&H64000000,-1,0,0,0,100,100,0,0,3,"
+        f"{max(2, size // 4)},0,1,0,0,0,1", "", "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text", *events, ""])
 
 
 def chat(tag, session, channel):
@@ -659,18 +739,27 @@ def streams(path):
     return set(kinds), rate if re.fullmatch(r"\d+/[1-9]\d*", rate) and not rate.startswith("0/") else "30/1", seconds
 
 
-def edit(w, h, face, o, cut, length, spike, rate, sound, subs=None, hook=None, tag=None, extras=()):
-    """The whole filter graph of a clip, ending in [v] and [a]: the layout, then the channel's own edits.
-
-    cut: seconds dropped from the front of the raw cut; length: seconds left; spike: when chat spiked, in clip
-    time; rate: frame rate; sound: whether the cut has sound. subs, hook and tag are files: captions to burn in,
-    the title line, the channel tag. extras: (input index, kind, has sound, seconds) per logo, intro or outro.
-    """
+def panels(w, h, face, o):
+    """The clip's settings with the cam panel's height worked out, the hand-set areas in pixels, and how much
+    of the clip the cam panel takes at the top and at the bottom."""
     box, game = ((a[0] * w, a[1] * h, a[2] * w, a[3] * h) if a else None for a in (o.cam_box, o.game_box))
     if o.face_h > 0 and o.height >= o.width and (o.cam_share or box):
         # the cam panel's height: set by hand, or the shape of the cam box, so the box shows whole
         o = copy.copy(o)
         o.face_h = even(o.height * min(max(o.cam_share or o.width * box[3] / box[2] / o.height, 0.12), 0.6))
+    panel = o.face_h if stacked(w, face, o, box) else 0
+    return o, box, game, panel if o.cam == "top" else 0, panel if o.cam == "bottom" else 0
+
+
+def edit(w, h, face, o, cut, length, spike, rate, sound, subs=None, hook=None, tag=None, extras=(), chat=None):
+    """The whole filter graph of a clip, ending in [v] and [a]: the layout, then the channel's own edits.
+
+    cut: seconds dropped from the front of the raw cut; length: seconds left; spike: when chat spiked, in clip
+    time; rate: frame rate; sound: whether the cut has sound. subs, hook and tag are files: captions to burn in,
+    the title line, the channel tag; chat is the chat box, an ASS file. extras: (input index, kind, has sound,
+    seconds) per logo, promo, intro or outro.
+    """
+    o, box, game, top, _ = panels(w, h, face, o)
 
     def motion(width, height):
         if o.zoom <= 0:
@@ -681,9 +770,8 @@ def edit(w, h, face, o, cut, length, spike, rate, sound, subs=None, hook=None, t
         return f",zoompan=z='{z}':d=1:x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':s={width}x{height}:fps={rate}"
 
     W, H = o.width, o.height
-    top = o.face_h if o.cam == "top" and stacked(w, face, o, box) else 0
     graph = [f"[0:v]trim=start={cut:.3f},setpts=PTS-STARTPTS[base]", layout(w, h, face, o, "[base]", motion, box, game)[:-3] + "[lay]"]
-    chain = []
+    chain = [f"ass={quote(chat)}"] if chat else []
     if subs:
         chain.append(f"subtitles={quote(subs)}:force_style='FontName=Arial,Fontsize={o.caption_size * 2.88:.1f},"
                      "Bold=1,Outline=3,Shadow=0,Alignment=2,MarginV=72'")
@@ -706,14 +794,15 @@ def edit(w, h, face, o, cut, length, spike, rate, sound, subs=None, hook=None, t
                  if sound else f"anullsrc=r=48000:cl=stereo,atrim=duration={length:.3f}[am]")
     parts = []
     for i, kind, has_sound, seconds in extras:
-        if kind not in ("intro", "outro"):
+        if kind not in ("promo", "intro", "outro"):
             continue
         graph.append(f"[{i}:v]scale={W}:{H}:force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,"
                      f"setsar=1,fps={rate},format=yuv420p[v{kind}]")
         graph.append(f"[{i}:a]aresample=48000,aformat=channel_layouts=stereo[a{kind}]" if has_sound
                      else f"anullsrc=r=48000:cl=stereo,atrim=duration={seconds:.3f}[a{kind}]")
         parts.append((kind, f"[v{kind}][a{kind}]"))
-    order = [p for k, p in parts if k == "intro"] + [video + "[am]"] + [p for k, p in parts if k == "outro"]
+    order = ([p for k, p in parts if k == "promo"] + [p for k, p in parts if k == "intro"] + [video + "[am]"]
+             + [p for k, p in parts if k == "outro"])
     if len(order) == 1:
         graph.append(f"{video}null[v];[am]anull[a]")
     else:
@@ -808,8 +897,14 @@ def make_clip(recorder, out, source, args, lag, noticed):
                 if text:
                     files[kind] = RUN / f"{out.stem}.{kind}.txt"
                     files[kind].write_text(text, encoding="utf-8")
+            begin = start + duration - length  # wall-clock time of the clip's first frame
+            heard = [line for line in heard_chat(source) if begin - 20 <= line[0] <= begin + length]
+            board = chat_box(heard, begin, length, o, *panels(w, h, face, o)[3:])
+            if board:
+                files["chat"] = RUN / f"{out.stem}.chat.ass"
+                files["chat"].write_text(board, encoding="utf-8")
             extras, inputs = [], []
-            for kind in ("logo", "intro", "outro"):
+            for kind in ("logo", "promo", "intro", "outro"):
                 path = getattr(o, kind)
                 if path:
                     found, _, seconds = streams(path) if kind != "logo" else (set(), "", 0)
@@ -817,7 +912,7 @@ def make_clip(recorder, out, source, args, lag, noticed):
                     inputs += ["-i", path]
             graph = edit(w, h, face, o, cut, length, spike, rate, "audio" in kinds,
                          srt if o.captions == "burn" and said else None,  # ffmpeg refuses an empty .srt
-                         files.get("hook"), files.get("tag"), extras)
+                         files.get("hook"), files.get("tag"), extras, files.get("chat"))
             ffmpeg("-i", raw, *inputs, "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
                    "-c:v", "libx264", "-crf", o.crf, "-c:a", "aac", part)
             shutil.move(part, out)
@@ -1032,6 +1127,10 @@ def build_parser():
     own.add_argument("--logo", help="image file shown in a corner, for example a PNG of your logo")
     own.add_argument("--intro", help="video file put in front of every clip")
     own.add_argument("--outro", help="video file put after every clip")
+    own.add_argument("--promo", help="video file put before the intro, for example a sponsor's promo")
+    own.add_argument("--chat-box", default="left", choices=["left", "right", "off"],
+                     help="the real chat of the moment scrolling in a box on that side of the clip")
+    own.add_argument("--chat-lines", type=int, default=7, help="how many chat lines the box shows at once")
     yt = p.add_argument_group("YouTube")
     yt.add_argument("--upload", action="store_true", help="upload every clip to YouTube Shorts")
     yt.add_argument("--privacy", default="private", choices=["private", "unlisted", "public"],
@@ -1151,7 +1250,9 @@ def main():
     if args.window < args.bucket or args.height < 16 or not 0 <= args.face_share < 1:
         p.error("need --window >= --bucket, --height >= 16 and 0 <= --face-share < 1")
     shape(args)
-    for kind in ("logo", "intro", "outro"):
+    if not 1 <= args.chat_lines <= 20:
+        p.error("--chat-lines must be from 1 to 20")
+    for kind in ("logo", "promo", "intro", "outro"):
         if getattr(args, kind) and not Path(getattr(args, kind)).is_file():
             p.error(f"--{kind}: no file {getattr(args, kind)}")
     if args.zoom < 0 or args.caption_size <= 0 or args.hook_secs < 0:

@@ -142,8 +142,10 @@ Every clip gets these on top of the cut, each one adjustable or off under "Your 
 - `--captions burn`: what is said, burned into the picture a few words at a time (`file` only saves the .srt, `off` skips the speech step). `--caption-size` sets the size.
 - `--hook "{text}"`: a title line at the top for the first `--hook-secs` (3) seconds. `{text}` is the first words spoken, `{channel}` the streamer; write your own words to open every clip with them.
 - `--zoom 0.12`: the picture punches in on the moment chat spiked, with a slow push-in over the clip. The cam panel stays still. `0` turns it off.
-- `--tag @yourchannel`: your name, small in a corner. `--logo file.png`: your logo in the other corner.
+- `--tag=@yourchannel` (with `=`: a word starting with @ on its own loads a preset file): your name, small in a corner. `--logo file.png`: your logo in the other corner.
 - `--intro file.mp4`, `--outro file.mp4`: your own clips before and after.
+- `--promo file.mp4`: a promo, for example a sponsor's, played before the intro. A paid promotion must be declared on YouTube: tick "includes paid promotion" for those videos in YouTube Studio.
+- `--chat-box left`: the real chat of the moment, scrolling in a box the way it came in, so viewers see chat explode (`right` or `off`; `--chat-lines` sets how many lines show). Lines from chat bots are left out, and words listed in `chat_filter.txt` are masked as `***`. Chat is unmoderated: add any word you never want burned into your videos to that file.
 
 A starting intro and outro can be drawn for you, with no outside service:
 
