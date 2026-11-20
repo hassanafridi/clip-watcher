@@ -110,8 +110,14 @@ main { max-width: 1440px; margin: 0 auto; padding: 32px; display: grid; gap: 40p
 .shot .none[hidden], .shot img[hidden] { display: none; }
 .shot .none { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; color: var(--text-2); text-align: center; }
 .shot .box { position: absolute; border: 2px solid var(--cam); background: color-mix(in srgb, var(--cam) 18%, transparent); cursor: move; }
+.shot .box.game { border-color: #ffffff; background: none; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6); }
+.shot .box.auto { border-style: dashed; }
 .shot .box.off { border-style: dashed; opacity: 0.5; }
+.shot .tag { position: absolute; left: 0; top: 0; padding: 0 6px; font-size: 11px; line-height: 18px; color: #ffffff; background: var(--cam); }
+.shot .game .tag { color: #141415; background: #ffffff; }
 .shot .grip { position: absolute; right: -8px; bottom: -8px; width: 16px; height: 16px; border-radius: 4px; background: var(--cam); cursor: nwse-resize; }
+.shot .game .grip { background: #ffffff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6); }
+.side .pick { display: flex; flex-wrap: wrap; gap: 12px; }
 .side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .side h3 { margin: 0; font: 500 16px/20px var(--display); }
 .side label { display: block; color: var(--muted); font-size: 12px; line-height: 16px; margin-bottom: 4px; }
@@ -426,39 +432,51 @@ function preview() {
 
 let shaper = null;
 const SHAPES = ["9:16", "4:5", "3:4", "1:1", "16:9"];
+const HEIGHTS = [0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.5];
+const clamp = (v, low, high) => Math.min(Math.max(v, low), high);
 function closeShaper() {
   if (!shaper) return;
   if (shaper.url) URL.revokeObjectURL(shaper.url);
   shaper.root.remove();
   shaper = null;
 }
+function areaBox(kind, label) {
+  const node = el("div", {className: "box " + kind, tabIndex: 0, role: "group",
+                          ariaLabel: label + " area. Arrow keys move it, Shift with arrow keys changes its size"});
+  node.append(el("span", {className: "tag"}, label), el("span", {className: "grip"}));
+  return node;
+}
 function openShaper(id) {
   const r = rows.get(id), open = shaper && shaper.id === id;
   closeShaper();
   if (open || !r) return;
   const s = r.data, img = el("img", {alt: "What " + s.channel + " is recording now"});
+  const area = a => a && {x: a[0], y: a[1], w: a[2], h: a[3]};
   const ed = shaper = {
     id, img, url: null,
-    box: s.cam ? {x: s.cam[0], y: s.cam[1], w: s.cam[2], h: s.cam[3]} : {x: 0.02, y: 0.04, w: 0.26, h: 0.26},
-    frame: el("div", {className: "box", tabIndex: 0, role: "slider",
-                      ariaLabel: "Cam area. Arrow keys move it, Shift with arrow keys changes its size"}),
-    none: el("div", {className: "none"}, "Start the stream to see a picture. The shape can be set now."),
-    shape: el("select", {id: "shape-" + id}),
-    canvas: el("canvas", {width: 108, height: 192, role: "img"}),
+    cam: area(s.cam) || {x: 0.02, y: 0.04, w: 0.26, h: 0.26}, game: area(s.game),
+    boxes: {game: areaBox("game", "Game"), cam: areaBox("cam", "Cam")},
+    none: el("div", {className: "none"}, "Start the stream to see a picture. The settings can be made now."),
+    shape: el("select", {id: "shape-" + id}), height: el("select", {id: "height-" + id}),
+    canvas: el("canvas", {width: 108, height: 192, role: "img", ariaLabel: "Preview of the clip layout"}),
     note: el("p", {ariaLive: "polite"}),
   };
-  ed.frame.append(el("span", {className: "grip"}));
   ed.shape.append(el("option", {value: ""}, "Same as the settings"), ...SHAPES.map(v => el("option", {value: v}, v)));
   ed.shape.value = s.ratio || "";
-  ed.shot = el("div", {className: "shot"}, img, ed.none, ed.frame);
+  ed.height.append(el("option", {value: ""}, "Follows the cam box"),
+                   ...HEIGHTS.map(v => el("option", {value: String(v)}, Math.round(v * 100) + "% of the clip")));
+  ed.height.value = s.share ? String(s.share) : "";
+  ed.shot = el("div", {className: "shot"}, img, ed.none, ed.boxes.game, ed.boxes.cam);
   img.hidden = true;
-  const save = el("button", {className: "go"}, "Save"), auto = el("button", {}, "Use face detection");
-  const again = el("button", {}, "New picture"), close = el("button", {}, "Close");
+  const save = el("button", {className: "go"}, "Save"), auto = el("button", {}, "Find the face on its own");
+  const middle = el("button", {}, "Centre the game"), again = el("button", {}, "New picture"), close = el("button", {}, "Close");
   ed.root = el("div", {className: "shaper"}, ed.shot, el("div", {className: "side"},
-    el("h3", {}, "Cam and shape of " + s.channel),
-    el("div", {}, el("label", {htmlFor: ed.shape.id}, "Shape of this stream's clips"), ed.shape),
+    el("h3", {}, "Cam and game of " + s.channel),
+    el("div", {className: "pick"},
+       el("div", {}, el("label", {htmlFor: ed.shape.id}, "Shape of the clip"), ed.shape),
+       el("div", {}, el("label", {htmlFor: ed.height.id}, "Cam panel height"), ed.height)),
     ed.canvas, ed.note,
-    el("div", {className: "tools"}, save, auto, again, close)));
+    el("div", {className: "tools"}, save, auto, middle, again, close)));
   r.root.after(ed.root);
   img.onload = () => {
     ed.shot.style.aspectRatio = img.naturalWidth + " / " + img.naturalHeight;
@@ -466,89 +484,113 @@ function openShaper(id) {
     ed.none.hidden = true;
     fit();
   };
-  ed.shape.onchange = fit;
-  ed.frame.onpointerdown = event => drag(event, event.target.classList.contains("grip") ? "size" : "move");
-  ed.frame.onkeydown = event => {
-    const step = {ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1]}[event.key];
-    if (!step) return;
-    event.preventDefault();
-    const b = ed.box;
-    if (event.shiftKey) place(b.x, b.y, b.w + (step[0] - step[1]) * 0.01);
-    else place(b.x + step[0] * 0.01, b.y + step[1] * 0.01, b.w);
-  };
-  save.onclick = () => store([ed.box.x, ed.box.y, ed.box.w, ed.box.h].map(v => Math.round(v * 10000) / 10000),
-                             "Saved. The next clips of " + s.channel + " use this cam area and shape.");
-  auto.onclick = () => store(null, "Saved. The next clips of " + s.channel + " find the streamer's face on their own.");
+  ed.shape.onchange = ed.height.onchange = fit;
+  for (const kind of ["cam", "game"]) {
+    const node = ed.boxes[kind];
+    node.onpointerdown = event => drag(event, kind, event.target.classList.contains("grip") ? "size" : "move");
+    node.onkeydown = event => {
+      const step = {ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1]}[event.key];
+      if (!step) return;
+      event.preventDefault();
+      const b = current(kind), dx = step[0] * 0.01, dy = step[1] * 0.01;
+      if (event.shiftKey) set(kind, b.x, b.y, b.w + (kind === "game" ? dx - dy : dx), b.h + dy);
+      else set(kind, b.x + dx, b.y + dy, b.w, b.h);
+    };
+  }
+  const round = a => a && [a.x, a.y, a.w, a.h].map(v => Math.round(v * 10000) / 10000);
+  save.onclick = () => store(round(ed.cam), round(ed.game), "Saved. The next clips of " + s.channel + " use this layout.");
+  auto.onclick = () => store(null, round(ed.game), "Saved. The next clips of " + s.channel + " find the streamer's face on their own.");
+  middle.onclick = () => { ed.game = null; fit(); };
   again.onclick = shoot;
   close.onclick = closeShaper;
   fit();
   if (s.running) shoot();
-  ed.frame.focus();
+  ed.boxes.cam.focus();
 }
-// the clip's shape, and the cam panel's shape in picture terms, from the shape picked and the shared settings
+// the clip's shape, the cam panel's height, and the shapes both panels need, from the choices and the settings
 function plan() {
-  const m = /^(\d+):(\d+)$/.exec(shaper.shape.value || read("--ratio")) || [0, 9, 16];
-  const ratio = m[1] / m[2], share = Number(read("--face-share")) || 1 / 3, cam = read("--cam");
-  const img = shaper.img, pw = img.naturalWidth || 16, ph = img.naturalHeight || 9;
-  return {ratio, share, cam, pw, ph, stacked: cam !== "off" && share > 0 && share < 1 && ratio <= 1, panel: ratio / share};
+  const ed = shaper, m = /^(\d+):(\d+)$/.exec(ed.shape.value || read("--ratio")) || [0, 9, 16];
+  const ratio = m[1] / m[2], cam = read("--cam"), pw = ed.img.naturalWidth || 16, ph = ed.img.naturalHeight || 9;
+  const stacked = cam !== "off" && ratio <= 1 && Number(read("--face-share")) > 0;
+  const share = Number(ed.height.value) || clamp(ratio * (ed.cam.h * ph) / (ed.cam.w * pw), 0.12, 0.6);
+  return {ratio, cam, pw, ph, stacked, share, panel: ratio / share, game: stacked ? ratio / (1 - share) : ratio};
 }
-function place(x, y, w) {
-  const p = plan(), k = p.pw / (p.ph * p.panel);  // box height per width, as shares of the picture
-  w = Math.min(Math.max(w, 0.04), 1, 1 / k);
-  const h = w * k;
-  shaper.box = {x: Math.min(Math.max(x, 0), 1 - w), y: Math.min(Math.max(y, 0), 1 - h), w, h};
-  const f = shaper.frame.style, b = shaper.box;
-  f.left = b.x * 100 + "%"; f.top = b.y * 100 + "%"; f.width = b.w * 100 + "%"; f.height = b.h * 100 + "%";
-  shaper.frame.setAttribute("aria-valuetext", `left ${Math.round(b.x * 100)}%, top ${Math.round(b.y * 100)}%, width ${Math.round(b.w * 100)}%`);
+// the part of the picture a crop of this shape takes: around an area (holding all of it), or the middle
+function holding(a, aspect, p) {
+  const aw = a.w * p.pw, ah = a.h * p.ph, w = Math.min(p.pw, Math.max(aw, ah * aspect), p.ph * aspect), h = w / aspect;
+  return [clamp(a.x * p.pw + aw / 2 - w / 2, 0, p.pw - w), clamp(a.y * p.ph + ah / 2 - h / 2, 0, p.ph - h), w, h];
+}
+function centre(aspect, p) {
+  const w = Math.min(p.pw, p.ph * aspect), h = w / aspect;
+  return {x: (p.pw - w) / 2 / p.pw, y: (p.ph - h) / 2 / p.ph, w: w / p.pw, h: h / p.ph};
+}
+const current = kind => kind === "cam" ? shaper.cam : shaper.game || centre(plan().game, plan());
+function set(kind, x, y, w, h) {
+  const p = plan();
+  if (kind === "game") {  // the game fills its panel, so its area keeps the panel's shape; smaller is closer
+    const k = p.pw / (p.ph * p.game);
+    w = clamp(w, 0.05, Math.min(1, 1 / k));
+    h = w * k;
+  } else {
+    w = clamp(w, 0.03, 1);
+    h = clamp(h, 0.03, 1);
+  }
+  shaper[kind] = {x: clamp(x, 0, 1 - w), y: clamp(y, 0, 1 - h), w, h};
+  render();
+}
+function render() {
+  const p = plan();
+  for (const kind of ["cam", "game"]) {
+    const b = current(kind), node = shaper.boxes[kind], f = node.style;
+    f.left = b.x * 100 + "%"; f.top = b.y * 100 + "%"; f.width = b.w * 100 + "%"; f.height = b.h * 100 + "%";
+    node.setAttribute("aria-valuetext", `left ${Math.round(b.x * 100)}%, top ${Math.round(b.y * 100)}%, ` +
+                      `width ${Math.round(b.w * 100)}%, height ${Math.round(b.h * 100)}%`);
+  }
+  shaper.boxes.cam.classList.toggle("off", !p.stacked);
+  shaper.boxes.game.classList.toggle("auto", !shaper.game);
   draw();
 }
 function fit() {
   const p = plan();
-  shaper.frame.classList.toggle("off", !p.stacked);
   shaper.note.textContent = p.stacked
-    ? "Drag the box over the streamer's cam, and drag its corner to size it. Its shape follows the cam panel."
-    : "This shape has no cam panel: the clip is one picture, so the box is not used.";
-  place(shaper.box.x, shaper.box.y, shaper.box.w);
+    ? "Drag the Cam box over the streamer's cam and size it from its corner, any shape. Drag the Game box to the part " +
+      "of the game to show; make it smaller to show it closer."
+    : "This shape has no cam panel: the clip is one picture, cut from the Game box.";
+  if (shaper.game) set("game", shaper.game.x, shaper.game.y, shaper.game.w, shaper.game.h);
+  else render();
 }
-function drag(event, mode) {
+function drag(event, kind, mode) {
   event.preventDefault();
-  const rect = shaper.shot.getBoundingClientRect(), start = {...shaper.box}, x0 = event.clientX, y0 = event.clientY;
+  event.stopPropagation();
+  const rect = shaper.shot.getBoundingClientRect(), start = {...current(kind)}, x0 = event.clientX, y0 = event.clientY;
   const move = e => {
     const dx = (e.clientX - x0) / rect.width, dy = (e.clientY - y0) / rect.height;
-    if (mode === "move") place(start.x + dx, start.y + dy, start.w); else place(start.x, start.y, start.w + dx);
+    if (mode === "move") set(kind, start.x + dx, start.y + dy, start.w, start.h);
+    else set(kind, start.x, start.y, start.w + dx, start.h + dy);
   };
   const up = () => { removeEventListener("pointermove", move); removeEventListener("pointerup", up); };
   addEventListener("pointermove", move);
   addEventListener("pointerup", up);
 }
-// the clip as it will come out: the cam panel cut from the box, the game cut from the middle
+// the clip as it will come out: the cam panel cut around the Cam box, the game cut around the Game box
 function draw() {
-  const p = plan(), c = shaper.canvas, ctx = c.getContext("2d"), img = shaper.img, b = shaper.box;
-  c.height = 192; c.width = Math.round(192 * Math.min(p.ratio, 1)) || 108;
+  const p = plan(), c = shaper.canvas, ctx = c.getContext("2d"), img = shaper.img;
   if (p.ratio > 1) { c.width = 192; c.height = Math.round(192 / p.ratio); }
-  const W = c.width, H = c.height, ready = !img.hidden;
-  const crop = (aspect, cx, cy) => {
-    const w = Math.min(p.pw, p.ph * aspect), h = w / aspect;
-    return [Math.min(Math.max(cx - w / 2, 0), p.pw - w), Math.min(Math.max(cy - h / 2, 0), p.ph - h), w, h];
-  };
-  const paint = (src, y, h, label) => {
+  else { c.height = 192; c.width = Math.round(192 * p.ratio); }
+  const W = c.width, H = c.height, ready = !img.hidden, game = current("game");
+  const paint = (src, y, h, tint) => {
     if (ready) { ctx.drawImage(img, ...src, 0, y, W, h); return; }
-    ctx.fillStyle = label === "Streamer cam" ? getComputedStyle(document.body).getPropertyValue("--cam") : "#888";
+    ctx.fillStyle = tint;
     ctx.fillRect(0, y, W, h);
   };
   ctx.clearRect(0, 0, W, H);
   if (!p.stacked) {
-    paint(crop(p.ratio, p.pw / 2, p.ph / 2), 0, H, "Game");
-  } else {
-    const camH = Math.round(H * p.share), bw = b.w * p.pw, bh = b.h * p.ph;
-    const tw = Math.min(p.pw, Math.max(bw, bh * p.panel), p.ph * p.panel);
-    const th = tw / p.panel, cx = b.x * p.pw + bw / 2, cy = b.y * p.ph + bh / 2;
-    const cam = [Math.min(Math.max(cx - tw / 2, 0), p.pw - tw), Math.min(Math.max(cy - th / 2, 0), p.ph - th), tw, th];
-    const top = p.cam === "top";
-    paint(cam, top ? 0 : H - camH, camH, "Streamer cam");
-    paint(crop(p.ratio / (1 - p.share), p.pw / 2, p.ph / 2), top ? camH : 0, H - camH, "Game");
+    paint(holding(game, p.ratio, p), 0, H, "#888");
+    return;
   }
-  c.setAttribute("aria-label", "Preview of the clip layout");
+  const camH = Math.round(H * p.share), top = p.cam === "top";
+  paint(holding(shaper.cam, p.panel, p), top ? 0 : H - camH, camH, getComputedStyle(document.body).getPropertyValue("--cam"));
+  paint(holding(game, p.game, p), top ? camH : 0, H - camH, "#888");
 }
 async function shoot() {
   const ed = shaper;
@@ -565,10 +607,10 @@ async function shoot() {
     if (shaper === ed) ed.note.textContent = error.message === "Failed to fetch" ? "clip-watcher is not running any more" : error.message;
   }
 }
-async function store(cam, done) {
+async function store(cam, game, done) {
   const ed = shaper;
   try {
-    await api("/api/shape", {id: ed.id, cam, ratio: ed.shape.value || null});
+    await api("/api/shape", {id: ed.id, cam, game, share: Number(ed.height.value) || null, ratio: ed.shape.value || null});
     if (shaper === ed) ed.note.textContent = done;
     show(await api("/api/state?since=" + next));
   } catch (error) {

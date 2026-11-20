@@ -118,6 +118,28 @@ for bad in ("1,2,3", "0.9,0,0.2,0.2", "-0.1,0,0.2,0.2", "a,b,c,d", "0,0,0,0.5"):
     except Exception as e:
         assert type(e).__name__ == "ArgumentTypeError", (bad, e)
 assert watcher.opening("one two three four five six seven eight") == "one two three four five six"
+# the game area set by hand: the game panel, or the whole clip when there is no panel, is cut around it
+graph = layout(1920, 1080, None, o, box=(1500, 50, 360, 220), game=(0, 0, 600, 1080))
+assert re.findall(r"crop=(\d+):(\d+):(\d+):(\d+)", graph)[1][2] == "0", graph
+graph = layout(1920, 1080, None, wide, game=(1200, 500, 640, 360))
+cw, ch, cx, cy = map(int, re.findall(r"crop=(\d+):(\d+):(\d+):(\d+)", graph)[0])
+assert (cw, ch) == (640, 360) and (cx, cy) == (1200, 500), graph
+# the cam panel takes the cam box's shape unless its height is set by hand, and stays between 12% and 60%
+edits = SimpleNamespace(width=1080, height=1920, face_h=640, face_zoom=4, big_face=BIG_FACE, cam="top", ratio=9 / 16,
+                        cam_box=(0.7, 0.05, 0.25, 0.25), game_box=None, cam_share=None, zoom=0, caption_size=6, hook_secs=3)
+assert "scale=1080:606[cam]" in watcher.edit(1920, 1080, None, edits, 0, 30, 20, "60/1", True), "a 16:9 cam gets a 16:9 panel"
+edits.cam_share = 0.25
+assert "scale=1080:480[cam]" in watcher.edit(1920, 1080, None, edits, 0, 30, 20, "60/1", True)
+edits.cam_share, edits.cam_box = None, (0.7, 0.05, 0.05, 0.6)
+assert "scale=1080:1152[cam]" in watcher.edit(1920, 1080, None, edits, 0, 30, 20, "60/1", True), "at most 60%"
+for good, want in (("0.25", 0.25), ("auto", None)):
+    assert watcher.share(good) == want
+for bad in ("0.05", "0.9", "half"):
+    try:
+        watcher.share(bad)
+        raise AssertionError(bad)
+    except Exception as e:
+        assert type(e).__name__ == "ArgumentTypeError", (bad, e)
 assert watcher.quote(r"C:\Users\a b\x.srt") == "'C\\:/Users/a b/x.srt'"
 
 # --- upload text ---
@@ -493,7 +515,7 @@ def run_clip(answer, lag=0, fail=None, probe="1.5\n1.5,34.5\n", speech=None, **o
     watcher.backlog = 1
     args = SimpleNamespace(before=20, after=10, jobs=1, crf=23, model="tiny", language=None, upload=False,
                            ratio=9 / 16, height=1920, face_share=1 / 3, face_zoom=4, big_face=BIG_FACE, cam="top",
-                           cam_box=None, captions="off", caption_size=6, hook="", hook_secs=3, zoom=0, tag=None,
+                           cam_box=None, game_box=None, cam_share=None, captions="off", caption_size=6, hook="", hook_secs=3, zoom=0, tag=None,
                            logo=None, intro=None, outro=None)
     vars(args).update(own)
     try:
@@ -570,7 +592,7 @@ with tempfile.TemporaryDirectory() as folder:
     watcher.TUNE.clear()
     graph = next(c for c in ran if "libx264" in c)
     graph = graph[graph.index("-filter_complex") + 1]
-    assert "scale=1920:640[cam]" in graph, "a shape and cam area changed while running apply to the next clip"
+    assert "scale=1920:1152[cam]" in graph, "a shape and cam area changed while running apply to the next clip"
 
     holder, waited, out = run_clip(None)
     assert holder.released == [(None, True)] and watcher.backlog == 0 and "no video was recorded" in said[-1]
@@ -841,7 +863,7 @@ with tempfile.TemporaryDirectory() as folder:
     groups = call("/api/options")[1]["groups"]
     offered = {o["flag"] for g in groups for o in g["options"]}
     flags = {a.option_strings[0] for a in watcher.build_parser()._actions if a.option_strings}
-    assert offered == flags - {"-h", "--stdin-control", "--category", "--top", "--cam-box"}, "the page offers the rest"
+    assert offered == flags - {"-h", "--stdin-control", "--category", "--top", "--cam-box", "--game-box", "--cam-share"}, "the page offers the rest"
     assert all(o["detail"] and o["label"] for g in groups for o in g["options"]), "every option explains itself"
 
     # add: several at once, a link names its site, plain names follow the Kick box
@@ -869,8 +891,9 @@ with tempfile.TemporaryDirectory() as folder:
     assert call("/api/shared", {"args": ["--min=40", "--ratio=1:1", "--kick"]})[0] == 200
     saved = json.loads(gui.SAVED.read_text(encoding="utf-8"))
     assert saved == {"shared": ["--min=40", "--ratio=1:1", "--kick"], "streams": [
-        {"channel": "xqc", "kick": False, "min": 170, "factor": 2.0, "cam": None, "ratio": None},
-        {"channel": "dinah", "kick": False, "min": 15, "factor": 2.5, "cam": None, "ratio": None}]}, saved
+        {"channel": "xqc", "kick": False, "min": 170, "factor": 2.0, "cam": None, "game": None, "share": None, "ratio": None},
+        {"channel": "dinah", "kick": False, "min": 15, "factor": 2.5, "cam": None, "game": None, "share": None,
+         "ratio": None}]}, saved
     assert call("/api/options")[1]["shared"] == ["--min=40", "--ratio=1:1", "--kick"]
 
     # finding streams by category goes through live.py; its message reaches the page as it is
@@ -974,9 +997,11 @@ with tempfile.TemporaryDirectory() as folder:
     assert "--ratio=1:1" not in second.command, "the stream's own shape wins over the shared one"
     assert call("/api/state")[1]["streams"][0]["cam"] == box
     assert call("/api/shape", {"id": "twitch-xqc", "cam": None, "ratio": None})[0] == 200
-    assert second.told[-2:] == ["cam=auto\n", "ratio=1:1\n"], "back to face detection and the shared shape"
-    assert call("/api/shape", {"id": "twitch-xqc", "cam": box, "ratio": "4:5"})[0] == 200
-    assert second.told[-2:] == ["cam=0.7,0.05,0.25,0.3\n", "ratio=4:5\n"], "a running stream is told at once"
+    assert second.told[-4:] == ["cam=auto\n", "game=auto\n", "share=auto\n", "ratio=1:1\n"], "back to automatic"
+    assert call("/api/shape", {"id": "twitch-xqc", "cam": box, "ratio": "4:5", "game": [0.2, 0, 0.5, 1],
+                               "share": 0.25})[0] == 200
+    assert second.told[-4:] == ["cam=0.7,0.05,0.25,0.3\n", "game=0.2,0,0.5,1\n", "share=0.25\n", "ratio=4:5\n"], \
+        "a running stream is told at once"
     deadline = time.time() + 3
     while stream.clips < 2 or stream.frames < 2:  # its own start-up lines are read first
         assert time.time() < deadline

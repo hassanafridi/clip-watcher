@@ -126,9 +126,14 @@ Clips are H.264 video with AAC sound. A face detector looks for the streamer in 
 - no face found: plain centre crop
 - `--cam off` or a landscape ratio: one crop, centred on the face when it fills the frame (see `--big-face`), otherwise the middle
 
-### Cam area and shape per stream
+### Cam, game and shape per stream
 
-Each row has a "Cam & shape" button. It shows a fresh still of what the stream is recording. Drag the box over the streamer's facecam, drag its corner to size it, and pick the clip shape (9:16, 4:5, 3:4, 1:1, 16:9, or the one in the settings). A preview shows how the clip will look. "Save" applies it from the stream's next clip, with no restart, and remembers it for that channel. "Use face detection" goes back to finding the face on its own. In the terminal the same is `--cam-box x,y,w,h` (shares of the frame, for example `0.7,0.05,0.25,0.3`).
+Each row has a "Cam & shape" button. It shows a fresh still of what the stream is recording, with two boxes on it:
+
+- **Cam**: drag it over the streamer's facecam and size it from its corner, any shape.
+- **Game**: drag it to the part of the game to show. It keeps the shape of the game panel; make it smaller to show the game closer. "Centre the game" goes back to the middle.
+
+Beside the picture: the clip shape (9:16, 4:5, 3:4, 1:1, 16:9, or the one in the settings) and the cam panel height (it follows the Cam box's shape, or pick 15% to 50% of the clip). A preview shows the clip as it will come out. "Save" applies it from the stream's next clip, with no restart, and remembers it for that channel. "Find the face on its own" drops the Cam box and goes back to face detection. In the terminal the same are `--cam-box`, `--game-box` (x,y,w,h as shares of the frame, for example `0.7,0.05,0.25,0.3`) and `--cam-share`.
 
 ## Your own edits
 

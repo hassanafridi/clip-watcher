@@ -580,12 +580,13 @@ def stacked(w, face, o, box=None):
     return bool(box) or face is not None and face[2] < w * o.big_face
 
 
-def layout(w, h, face, o, src="[0:v]", motion=lambda width, height: "", box=None):
+def layout(w, h, face, o, src="[0:v]", motion=lambda width, height: "", box=None, game=None):
     """ffmpeg filter graph that turns a w x h frame into o.width x o.height, built around the face when there is one.
 
     o.face_h is the height of the facecam panel; 0 or a landscape output means the panels are never stacked.
-    box is a cam area set by hand (x, y, w, h in pixels); it takes the place of the face. motion(width, height)
-    gives filters that move the main picture, appended once it has its final size.
+    box is a cam area set by hand (x, y, w, h in pixels); it takes the place of the face. game is the part of
+    the picture set by hand for the game (or the whole clip without a panel); without it the middle is used.
+    motion(width, height) gives filters that move the main picture, appended once it has its final size.
     """
     out_w, out_h, face_h = o.width, o.height, o.face_h
 
@@ -595,12 +596,22 @@ def layout(w, h, face, o, src="[0:v]", motion=lambda width, height: "", box=None
     def crop(aspect):
         return even(min(w, h * aspect)), even(min(h, w / aspect))
 
+    def holding(area, aspect):
+        """The smallest crop of this shape that holds the whole area, kept inside the frame."""
+        ax, ay, aw, ah = area
+        cw = even(min(w, max(aw, ah * aspect), h * aspect))
+        ch = even(cw / aspect)
+        return cw, ch, clamp(ax + aw / 2 - cw / 2, w - cw), clamp(ay + ah / 2 - ch / 2, h - ch)
+
     def one(x, y):
         return f"{src}crop={cw}:{ch}:{x}:{y},scale={out_w}:{out_h}{motion(out_w, out_h)},setsar=1[v]"
 
     cw, ch = crop(out_w / out_h)
     big = face is not None and face[2] >= w * o.big_face
     if not stacked(w, face, o, box):
+        if game:
+            cw, ch, gx, gy = holding(game, out_w / out_h)
+            return one(gx, gy)
         if big:
             fx, fy, fw, fh = face
             return one(clamp(fx + fw / 2 - cw / 2, w - cw), clamp(fy + fh / 2 - ch / 2, h - ch))
@@ -617,10 +628,14 @@ def layout(w, h, face, o, src="[0:v]", motion=lambda width, height: "", box=None
     tw = even(tw)
     th = even(tw / aspect)
     tx, ty = clamp(cx - tw / 2, w - tw), clamp(cy - th / 2, h - th)
-    gw, gh = crop(out_w / (out_h - face_h))
+    if game:
+        gw, gh, gx, gy = holding(game, out_w / (out_h - face_h))
+    else:
+        gw, gh = crop(out_w / (out_h - face_h))
+        gx, gy = (w - gw) // 2, (h - gh) // 2
     return (
         f"{src}split[a][b];[a]crop={tw}:{th}:{tx}:{ty},scale={out_w}:{face_h}[cam];"
-        f"[b]crop={gw}:{gh}:{(w - gw) // 2}:{(h - gh) // 2},scale={out_w}:{out_h - face_h}"
+        f"[b]crop={gw}:{gh}:{gx}:{gy},scale={out_w}:{out_h - face_h}"
         f"{motion(out_w, out_h - face_h)}[game];"
         f"{'[cam][game]' if o.cam == 'top' else '[game][cam]'}vstack,setsar=1[v]"
     )
@@ -651,10 +666,11 @@ def edit(w, h, face, o, cut, length, spike, rate, sound, subs=None, hook=None, t
     time; rate: frame rate; sound: whether the cut has sound. subs, hook and tag are files: captions to burn in,
     the title line, the channel tag. extras: (input index, kind, has sound, seconds) per logo, intro or outro.
     """
-    box = None
-    if o.cam_box:
-        bx, by, bw, bh = o.cam_box
-        box = (bx * w, by * h, bw * w, bh * h)
+    box, game = ((a[0] * w, a[1] * h, a[2] * w, a[3] * h) if a else None for a in (o.cam_box, o.game_box))
+    if o.face_h > 0 and o.height >= o.width and (o.cam_share or box):
+        # the cam panel's height: set by hand, or the shape of the cam box, so the box shows whole
+        o = copy.copy(o)
+        o.face_h = even(o.height * min(max(o.cam_share or o.width * box[3] / box[2] / o.height, 0.12), 0.6))
 
     def motion(width, height):
         if o.zoom <= 0:
@@ -666,7 +682,7 @@ def edit(w, h, face, o, cut, length, spike, rate, sound, subs=None, hook=None, t
 
     W, H = o.width, o.height
     top = o.face_h if o.cam == "top" and stacked(w, face, o, box) else 0
-    graph = [f"[0:v]trim=start={cut:.3f},setpts=PTS-STARTPTS[base]", layout(w, h, face, o, "[base]", motion, box)[:-3] + "[lay]"]
+    graph = [f"[0:v]trim=start={cut:.3f},setpts=PTS-STARTPTS[base]", layout(w, h, face, o, "[base]", motion, box, game)[:-3] + "[lay]"]
     chain = []
     if subs:
         chain.append(f"subtitles={quote(subs)}:force_style='FontName=Arial,Fontsize={o.caption_size * 2.88:.1f},"
@@ -718,8 +734,9 @@ def clip_options(args):
     o = copy.copy(args)
     if "ratio" in TUNE:
         o.ratio = TUNE["ratio"]
-    if "cam_box" in TUNE:
-        o.cam_box = TUNE["cam_box"]
+    for key in ("cam_box", "game_box", "cam_share"):
+        if key in TUNE:
+            setattr(o, key, TUNE[key])
     return shape(o)
 
 
@@ -924,6 +941,19 @@ def box(text):
     return x, y, w, h
 
 
+def share(text):
+    """A cam panel height from 0.12 to 0.6 of the clip; 'auto' or nothing means it follows the cam box."""
+    if text in ("", "auto"):
+        return None
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("use a number from 0.12 to 0.6") from None
+    if not 0.12 <= value <= 0.6:
+        raise argparse.ArgumentTypeError("use a number from 0.12 to 0.6")
+    return value
+
+
 def build_parser():
     p = argparse.ArgumentParser(
         description=__doc__,
@@ -972,6 +1002,11 @@ def build_parser():
                       help="where the streamer's cam panel sits; off keeps one picture")
     clip.add_argument("--cam-box", type=box, metavar="X,Y,W,H",
                       help="cam area set by hand, as shares of the frame; empty uses face detection")
+    clip.add_argument("--game-box", type=box, metavar="X,Y,W,H",
+                      help="part of the picture shown as the game, as shares of the frame; empty uses the middle")
+    clip.add_argument("--cam-share", type=share, metavar="SHARE",
+                      help="cam panel height as a part of the clip, 0.12 to 0.6; empty follows the cam box's shape, "
+                           "or --face-share without one")
     clip.add_argument("--face-share", type=float, default=1 / 3,
                       help="part of the clip height the cam panel takes, from 0 to 1")
     clip.add_argument("--face-zoom", type=float, default=4,
@@ -1072,6 +1107,10 @@ def control():
                 TUNE["ratio"] = ratio(value)
             elif key == "cam":
                 TUNE["cam_box"] = box(value)
+            elif key == "game":
+                TUNE["game_box"] = box(value)
+            elif key == "share":
+                TUNE["cam_share"] = share(value)
         except (ValueError, argparse.ArgumentTypeError):
             pass
     STOP.set()
