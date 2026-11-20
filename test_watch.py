@@ -97,6 +97,29 @@ assert "[game][cam]vstack" in layout(1920, 1080, (96, 108, 96, 96), o)
 o.cam = "top"
 assert "[cam][game]vstack" in layout(1920, 1080, (96, 108, 96, 96), o)
 
+# a cam area set by hand: always its own panel when the shape allows one, holding the whole area
+for bx, by, bw, bh in ((1500, 50, 360, 220), (0, 0, 200, 600), (1700, 900, 220, 180)):
+    graph = layout(1920, 1080, None, o, box=(bx, by, bw, bh))
+    cw, ch, cx, cy = map(int, re.findall(r"crop=(\d+):(\d+):(\d+):(\d+)", graph)[0])
+    assert "vstack" in graph and cx <= bx + 1 and cy <= by + 1 and cx + cw >= min(bx + bw, 1920) - 2, graph
+    assert cy + ch >= min(by + bh, 1080) - 2 and cx + cw <= 1920 and cy + ch <= 1080, graph
+    assert abs(cw / ch - 1080 / 640) < 0.02, "the cam crop has the panel's shape"
+wide = SimpleNamespace(width=1920, height=1080, face_h=360, face_zoom=4, big_face=BIG_FACE, cam="top")
+assert "vstack" not in layout(1920, 1080, None, wide, box=(1500, 50, 360, 220)), "a wide clip has no panel"
+assert "zoompan=" in layout(1920, 1080, None, o, "[base]", lambda w, h: f",zoompan=s={w}x{h}", (1500, 50, 360, 220))
+assert ",zoompan=s=1080x1280[game]" in layout(1920, 1080, None, o, "[base]", lambda w, h: f",zoompan=s={w}x{h}",
+                                              (1500, 50, 360, 220)), "only the game moves; the cam stays still"
+for good, want in (("0.7,0.05,0.25,0.3", (0.7, 0.05, 0.25, 0.3)), ("auto", None), ("", None)):
+    assert watcher.box(good) == want
+for bad in ("1,2,3", "0.9,0,0.2,0.2", "-0.1,0,0.2,0.2", "a,b,c,d", "0,0,0,0.5"):
+    try:
+        watcher.box(bad)
+        raise AssertionError(bad)
+    except Exception as e:
+        assert type(e).__name__ == "ArgumentTypeError", (bad, e)
+assert watcher.opening("one two three four five six seven eight") == "one two three four five six"
+assert watcher.quote(r"C:\Users\a b\x.srt") == "'C\\:/Users/a b/x.srt'"
+
 # --- upload text ---
 assert transcript(Path("missing.srt")) == ""
 assert describe("", "somechannel") == ("live moment | somechannel", "")
@@ -442,7 +465,7 @@ class Holder:
         self.released.append((seg, cut_done))
 
 
-def run_clip(answer, lag=0, fail=None, probe="1.5\n1.5,34.5\n"):
+def run_clip(answer, lag=0, fail=None, probe="1.5\n1.5,34.5\n", speech=None, **own):
     ran.clear()
     said.clear()
 
@@ -451,8 +474,13 @@ def run_clip(answer, lag=0, fail=None, probe="1.5\n1.5,34.5\n"):
         ran.append(command)
         if fail and fail in command:
             raise RuntimeError("ffmpeg failed: boom")
+        if command[0] == "ffprobe" and "stream=codec_type,r_frame_rate:format=duration" in command:
+            return "video,60/1\naudio,0/0\n34.5\n"
         if command[0] == "ffprobe":
             return "[h264 @ 000001] no frame!\n" + probe  # first picture at, then: the cut begins at, its length
+        if command[1:3] == ["-m", "whisper"] and speech is not None:
+            Path(folder, "chan_20260101_000000.srt").write_text(
+                "1\n00:00:00,000 --> 00:00:02,000\nwhat a play\n" if speech else "", encoding="utf-8")
         if command[:2] == [sys.executable, "-c"]:
             return "noise\n[1920, 1080, null]\n"
         if "libx264" in command:
@@ -464,7 +492,10 @@ def run_clip(answer, lag=0, fail=None, probe="1.5\n1.5,34.5\n"):
     watcher.time, watcher.run, watcher.take_slot = clock, fake_run, lambda jobs: SimpleNamespace(close=lambda: None)
     watcher.backlog = 1
     args = SimpleNamespace(before=20, after=10, jobs=1, crf=23, model="tiny", language=None, upload=False,
-                           width=1080, height=1920, face_h=640, face_zoom=4, big_face=BIG_FACE, cam="top")
+                           ratio=9 / 16, height=1920, face_share=1 / 3, face_zoom=4, big_face=BIG_FACE, cam="top",
+                           cam_box=None, captions="off", caption_size=6, hook="", hook_secs=3, zoom=0, tag=None,
+                           logo=None, intro=None, outro=None)
+    vars(args).update(own)
     try:
         out = watcher.CLIPS / "chan_20260101_000000.mp4"
         watcher.make_clip(holder, out, "twitch.tv/chan", args, lag, clock.now)
@@ -483,14 +514,16 @@ with tempfile.TemporaryDirectory() as folder:
     assert holder.asked == [(1_000_000 - 24, 1_000_000 + 10)], "20 s before the spike plus the lead-in, to 10 s after"
     cut, encode = ran[0], next(c for c in ran if "libx264" in c)
     assert cut[cut.index("-sseof"):][:8] == ["-sseof", "-36", "-i", str(segment.path), "-t", "34", "-c", "copy"], cut
-    assert encode[encode.index("-i"):][:4] == ["-i", str(Path(folder) / "chan_20260101_000000.cut.ts"), "-ss", "4.5"], encode
+    assert encode[encode.index("-i"):][:2] == ["-i", str(Path(folder) / "chan_20260101_000000.cut.ts")], encode
+    assert "[0:v]trim=start=4.500," in encode[encode.index("-filter_complex") + 1], "the lead-in is cut after decoding"
     assert ["-c:v", "libx264"] == encode[encode.index("-c:v"):][:2] and "aac" in encode, "H.264 and AAC, said outright"
     assert holder.released == [(segment, True)] and watcher.backlog == 0 and out.read_bytes() == b"clip"
     assert said[-1].startswith("saved ") and not list(Path(folder).glob("*.cut.ts")) + list(Path(folder).glob("*.part.mp4"))
 
     holder, waited, out = run_clip((segment, 46, 34, 1_000_000 - 44), lag=20)
     assert waited == 0 and holder.asked == [(1_000_000 - 44, 1_000_000 - 10)], "a Kick clip sits 20 s further back"
-    dropped = lambda: next(c[c.index("-ss") + 1] for c in ran if "libx264" in c)  # of a 34.5 s cut
+    dropped = lambda: format(float(re.search(r"trim=start=([\d.]+)", next(c for c in ran if "libx264" in c)[
+        next(c for c in ran if "libx264" in c).index("-filter_complex") + 1])[1]), "g")  # of a 34.5 s cut
     assert dropped() == "4.5"
 
     # the recording is 1.5 s behind: the clip waits for it, here one second, and is whole
@@ -514,6 +547,31 @@ with tempfile.TemporaryDirectory() as folder:
     assert ran == [] and "no video was recorded" in said[-1] and holder.released[-1] == (segment, True)
     assert watcher.backlog == 0 and holder.released.count((segment, True)) == 1
 
+    # the channel's own edits: burned-in words, a title line from them, the tag, motion, intro and outro
+    extra = Path(folder) / "intro.mp4"
+    extra.write_bytes(b"x")
+    run_clip((segment, 36, 34, 1_000_000 - 24), speech=True, captions="burn", hook="{text}!", zoom=0.12,
+             tag="@me", intro=str(extra), outro=str(extra))
+    whisper = next(c for c in ran if c[1:3] == ["-m", "whisper"])
+    assert whisper[3].endswith(".wav") and "--max_words_per_line" in whisper, "words are read before the encode"
+    encode = next(c for c in ran if "libx264" in c)
+    graph = encode[encode.index("-filter_complex") + 1]
+    assert encode.count("-i") == 3 and "subtitles=" in graph and "zoompan=" in graph and "concat=n=3" in graph, graph
+    assert "it-19.850" in graph, "the punch-in lands on the spike, 20 s into the clip"
+    assert "[1:v]" in graph and "[2:v]" in graph and "[3:v]" not in graph, "intro is input 1, outro input 2"
+    assert (Path(folder) / "clips" / "chan_20260101_000000.srt").exists() and said[-1].endswith(".srt")
+    assert not list(Path(folder).glob("chan_20260101_000000.*")), "no working files are left"
+    run_clip((segment, 36, 34, 1_000_000 - 24), speech=False, captions="burn", hook="{text}")
+    graph = next(c for c in ran if "libx264" in c)
+    graph = graph[graph.index("-filter_complex") + 1]
+    assert "subtitles=" not in graph and "drawtext" not in graph and "concat" not in graph, "nothing said, no title"
+    watcher.TUNE.update(ratio=1.0, cam_box=(0.7, 0.05, 0.25, 0.3))
+    run_clip((segment, 36, 34, 1_000_000 - 24))
+    watcher.TUNE.clear()
+    graph = next(c for c in ran if "libx264" in c)
+    graph = graph[graph.index("-filter_complex") + 1]
+    assert "scale=1920:640[cam]" in graph, "a shape and cam area changed while running apply to the next clip"
+
     holder, waited, out = run_clip(None)
     assert holder.released == [(None, True)] and watcher.backlog == 0 and "no video was recorded" in said[-1]
     assert ran == [], "nothing is cut when no recording holds the moment"
@@ -524,11 +582,13 @@ with tempfile.TemporaryDirectory() as folder:
 # --- commands from the board on stdin: quit is still heard after stop ---
 quits = []
 real_stdin, real_quit = sys.stdin, watcher.quit_now
-sys.stdin, watcher.quit_now = io.StringIO("min=170\nfactor=1.8\nnonsense\nmin=abc\nstop\nquit\n"), lambda: quits.append(1)
+sys.stdin, watcher.quit_now = io.StringIO("min=170\nfactor=1.8\nnonsense\nmin=abc\nratio=4:5\nratio=wide\n"
+                                         "cam=0.7,0.05,0.25,0.3\ncam=2,2,2,2\nstop\nquit\n"), lambda: quits.append(1)
 watcher.STOP.clear()
 watcher.control()
 sys.stdin, watcher.quit_now = real_stdin, real_quit
-assert watcher.TUNE == {"min": 170, "factor": 1.8} and watcher.STOP.is_set() and quits == [1]
+assert watcher.TUNE == {"min": 170, "factor": 1.8, "ratio": 0.8, "cam_box": (0.7, 0.05, 0.25, 0.3)}, watcher.TUNE
+assert watcher.STOP.is_set() and quits == [1]
 watcher.STOP.clear()
 watcher.TUNE.clear()
 
@@ -749,6 +809,7 @@ FakeChild.lines = [
     "[xqc] 20s | Msgs: 84 | Median: 91 | Threshold: 46 | recording\n",
     "[xqc] SPIKE: 84 msgs (median 91), cutting xqc_20261118_201228.mp4\n",
     "[xqc] saved clips\\xqc_20261118_201228.mp4 and xqc_20261118_201228.srt\n",
+    "[xqc] frame none\n",
     "[xqc] 30s | Msgs: 3 | chat not counted | recording\n",
 ]
 
@@ -780,7 +841,7 @@ with tempfile.TemporaryDirectory() as folder:
     groups = call("/api/options")[1]["groups"]
     offered = {o["flag"] for g in groups for o in g["options"]}
     flags = {a.option_strings[0] for a in watcher.build_parser()._actions if a.option_strings}
-    assert offered == flags - {"-h", "--stdin-control", "--category", "--top"}, "the page offers every other option"
+    assert offered == flags - {"-h", "--stdin-control", "--category", "--top", "--cam-box"}, "the page offers the rest"
     assert all(o["detail"] and o["label"] for g in groups for o in g["options"]), "every option explains itself"
 
     # add: several at once, a link names its site, plain names follow the Kick box
@@ -808,8 +869,8 @@ with tempfile.TemporaryDirectory() as folder:
     assert call("/api/shared", {"args": ["--min=40", "--ratio=1:1", "--kick"]})[0] == 200
     saved = json.loads(gui.SAVED.read_text(encoding="utf-8"))
     assert saved == {"shared": ["--min=40", "--ratio=1:1", "--kick"], "streams": [
-        {"channel": "xqc", "kick": False, "min": 170, "factor": 2.0},
-        {"channel": "dinah", "kick": False, "min": 15, "factor": 2.5}]}, saved
+        {"channel": "xqc", "kick": False, "min": 170, "factor": 2.0, "cam": None, "ratio": None},
+        {"channel": "dinah", "kick": False, "min": 15, "factor": 2.5, "cam": None, "ratio": None}]}, saved
     assert call("/api/options")[1]["shared"] == ["--min=40", "--ratio=1:1", "--kick"]
 
     # finding streams by category goes through live.py; its message reaches the page as it is
@@ -871,6 +932,7 @@ with tempfile.TemporaryDirectory() as folder:
                                           "median": None, "video": True}
     assert row["streams"][0]["history"] == [[84, 46], [3, None]] and row["streams"][0]["last"] == "xqc_20261118_201228.mp4"
     assert not any("Msgs:" in line for line in row["lines"]) and any("SPIKE" in line for line in row["lines"])
+    assert not any("frame" in line for line in row["lines"]) and stream.frames == 1 and stream.frame is None
     assert call("/api/remove", {"id": "twitch-xqc"}) == (400, {"error": "Stop the stream before removing it"})
 
     # stopping: asked once; asking everything to stop again never forces; only a named, forced stop quits at once
@@ -893,13 +955,60 @@ with tempfile.TemporaryDirectory() as folder:
 
     gone()
     assert not stream.stopping and stream.forced and stream.exit == 0, "a quit that was asked for is not an error"
+    # a cam area and a shape set by hand are kept, checked, and used from the next start
+    box = [0.7, 0.05, 0.25, 0.3]
+    assert call("/api/shape", {"id": "twitch-xqc", "cam": box, "ratio": "4:5"})[0] == 200
+    for bad in ({"cam": [0.9, 0, 0.3, 0.3]}, {"cam": "0.1,0.1,0.2,0.2"}, {"cam": [0.1, 0.1]}, {"ratio": "wide"},
+                {"cam": [0.1, 0.1, 0.2, "x"]}):
+        assert call("/api/shape", {"id": "twitch-xqc", "cam": box, "ratio": "4:5", **bad})[0] == 400, bad
+    assert call("/api/shape", {"id": "nobody", "cam": box})[0] == 400
+    assert call("/api/frame?id=twitch-xqc") == (409, {"error": "Start the stream to get a picture of it"})
     # the same exit code without that request is one, and the row says so
     subprocess.Popen = FakeChild
     try:
         assert call("/api/start", {"id": "twitch-xqc"})[0] == 200
     finally:
         subprocess.Popen = real_popen
-    FakeChild.made[-1].code = 1
+    second = FakeChild.made[-1]
+    assert "--cam-box=0.7,0.05,0.25,0.3" in second.command and "--ratio=4:5" in second.command
+    assert "--ratio=1:1" not in second.command, "the stream's own shape wins over the shared one"
+    assert call("/api/state")[1]["streams"][0]["cam"] == box
+    assert call("/api/shape", {"id": "twitch-xqc", "cam": None, "ratio": None})[0] == 200
+    assert second.told[-2:] == ["cam=auto\n", "ratio=1:1\n"], "back to face detection and the shared shape"
+    assert call("/api/shape", {"id": "twitch-xqc", "cam": box, "ratio": "4:5"})[0] == 200
+    assert second.told[-2:] == ["cam=0.7,0.05,0.25,0.3\n", "ratio=4:5\n"], "a running stream is told at once"
+    deadline = time.time() + 3
+    while stream.clips < 2 or stream.frames < 2:  # its own start-up lines are read first
+        assert time.time() < deadline
+        time.sleep(0.02)
+
+    # a still of the stream for the cam editor: asked of watcher.py, and only ever a picture from rec/
+    picture = gui.HERE / "rec" / "frame-selfcheck.jpg"
+    picture.parent.mkdir(exist_ok=True)
+    picture.write_bytes(b"\xff\xd8 picture")
+
+    def answer(path):
+        def reply():
+            deadline = time.time() + 3
+            while second.told.count("frame\n") <= len(answered) and time.time() < deadline:
+                time.sleep(0.01)
+            answered.append(path)
+            with board.lock:
+                stream.frame, stream.frames = path, stream.frames + 1
+        threading.Thread(target=reply, daemon=True).start()
+
+    answered = []
+    try:
+        answer("rec/frame-selfcheck.jpg")
+        status, (body, _) = call("/api/frame?id=twitch-xqc")
+        assert status == 200 and body == b"\xff\xd8 picture"
+        answer("gui.py")
+        assert call("/api/frame?id=twitch-xqc")[0] == 409, "nothing outside rec/ is served"
+        answer(None)
+        assert call("/api/frame?id=twitch-xqc") == (409, {"error": "Nothing recorded yet; try again once the row says recording"})
+    finally:
+        picture.unlink()
+    second.code = 1
     FakeChild.made[-1].gone.set()
     gone()
     assert not stream.forced and stream.exit == 1
@@ -908,6 +1017,7 @@ with tempfile.TemporaryDirectory() as folder:
     # the board comes back as it was left, and one damaged row costs only itself
     board = gui.Board()
     assert [s.id for s in board.streams.values()] == ["twitch-xqc", "twitch-dinah"] and board.streams["twitch-xqc"].min == 200
+    assert board.streams["twitch-xqc"].cam == [0.7, 0.05, 0.25, 0.3] and board.streams["twitch-xqc"].ratio == "4:5"
     saved = json.loads(gui.SAVED.read_text(encoding="utf-8"))
     saved["streams"].insert(1, {"channel": "broken"})
     gui.SAVED.write_text(json.dumps(saved), encoding="utf-8")

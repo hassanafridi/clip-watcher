@@ -126,6 +126,34 @@ Clips are H.264 video with AAC sound. A face detector looks for the streamer in 
 - no face found: plain centre crop
 - `--cam off` or a landscape ratio: one crop, centred on the face when it fills the frame (see `--big-face`), otherwise the middle
 
+### Cam area and shape per stream
+
+Each row has a "Cam & shape" button. It shows a fresh still of what the stream is recording. Drag the box over the streamer's facecam, drag its corner to size it, and pick the clip shape (9:16, 4:5, 3:4, 1:1, 16:9, or the one in the settings). A preview shows how the clip will look. "Save" applies it from the stream's next clip, with no restart, and remembers it for that channel. "Use face detection" goes back to finding the face on its own. In the terminal the same is `--cam-box x,y,w,h` (shares of the frame, for example `0.7,0.05,0.25,0.3`).
+
+## Your own edits
+
+Every clip gets these on top of the cut, each one adjustable or off under "Your edits" in the settings:
+
+- `--captions burn`: what is said, burned into the picture a few words at a time (`file` only saves the .srt, `off` skips the speech step). `--caption-size` sets the size.
+- `--hook "{text}"`: a title line at the top for the first `--hook-secs` (3) seconds. `{text}` is the first words spoken, `{channel}` the streamer; write your own words to open every clip with them.
+- `--zoom 0.12`: the picture punches in on the moment chat spiked, with a slow push-in over the clip. The cam panel stays still. `0` turns it off.
+- `--tag @yourchannel`: your name, small in a corner. `--logo file.png`: your logo in the other corner.
+- `--intro file.mp4`, `--outro file.mp4`: your own clips before and after.
+
+A starting intro and outro can be drawn for you, with no outside service:
+
+    python brand.py "Chat Went Off" --handle @chatwentoff
+
+That writes `brand/intro.mp4` (1.2 s) and `brand/outro.mp4` (2 s); set `--intro brand/intro.mp4 --outro brand/outro.mp4`.
+
+What YouTube says about clip channels, in short (read their pages for the full text: "Reused content" in the YouTube Partner Program policies, the Shorts monetization policy, copyright and impersonation policies):
+
+- Clips of someone else's stream can be monetized only when your video adds something meaningful: commentary, review or a story of your own. The edits above help a viewer see your channel's own hand, but YouTube's wording points to substantive additions; your own voice-over counts most. Permission from the streamer does not change the reused-content rule.
+- The streamer, or a music owner whose song plays on stream, can claim or remove a clip. Three copyright strikes in 90 days end a channel.
+- Uploading many near-identical clips can count as spam or mass-produced content. Upload fewer, picked clips.
+- Do not name the channel after a streamer or make it look official.
+- Twitch's terms do not grant others the right to re-use streams; ask the streamers you clip.
+
 ## YouTube setup (once)
 
 1. In Google Cloud Console create a project and enable "YouTube Data API v3".

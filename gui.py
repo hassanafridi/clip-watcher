@@ -26,11 +26,12 @@ HISTORY = 60  # chat counts kept per stream for its chart
 LIMIT = 16  # streams on the board at most
 # a row carries its own minimum, multiplier and site; in the shared settings these only preset new rows
 PER_STREAM = ("--min", "--factor", "--kick")
-ON_THE_PAGE = ("--category", "--top")  # the page has its own finder for these
+ON_THE_PAGE = ("--category", "--top", "--cam-box")  # the page has its own finder and cam editor for these
 # the two lines of watcher.py the board reads; the first feeds the row's numbers and is kept out of the log
 STAT = re.compile(r"\[[^\]]+\] (\d+)s \| Msgs: (\d+) \| "
                   r"(?:(warming up|chat not counted)|Median: ([\d.]+) \| Threshold: (\d+)) \| (recording|no video)$")
 CLIP = re.compile(r"\] saved (\S+\.mp4)")
+FRAME = re.compile(r"\[[^\]]+\] frame (.+)$")  # a still for the cam editor, or "none"; kept out of the log
 
 # what the page calls each option, and its unit; anything missing falls back to the flag name
 LABELS = {
@@ -48,6 +49,10 @@ LABELS = {
     "--jobs": ("Clips finished at once", ""),
     "--upload": ("Upload to YouTube Shorts", ""), "--privacy": ("Visibility", ""),
     "--title": ("Title template", ""), "--description": ("Description template", ""),
+    "--captions": ("Captions", ""), "--caption-size": ("Caption size", "%"), "--hook": ("Title line", ""),
+    "--hook-secs": ("Title line shown for", "s"), "--zoom": ("Zoom at the spike", ""),
+    "--tag": ("Channel tag", ""), "--logo": ("Logo image", ""), "--intro": ("Intro video", ""),
+    "--outro": ("Outro video", ""),
 }
 # shown when a setting is hovered or focused: what it is for and when to change it
 DETAILS = {
@@ -103,6 +108,20 @@ DETAILS = {
                "and {channel} the streamer's name.",
     "--description": "Description given to each upload, with the same {text} and {channel} placeholders. "
                      "A credit link to the stream is added for you.",
+    "--captions": "Burn puts what is said into the picture, a few words at a time, the way Shorts viewers expect. "
+                  "File only saves the words as an .srt next to the clip. Off skips the speech step.",
+    "--caption-size": "Height of the burned-in words as a percent of the clip height. 6 is easy to read on a phone.",
+    "--hook": "A line of text at the top of the clip for its first seconds. {text} becomes the first words spoken, "
+              "{channel} the streamer's name. Write your own words here to make every clip open with them. "
+              "Empty means no title line.",
+    "--hook-secs": "How many seconds the title line stays on screen.",
+    "--zoom": "How far the picture pushes in on the moment chat exploded, plus a slow push-in across the clip, "
+              "so the clip is not one still crop. 0.12 is a clear punch, 0 turns it off. The cam panel stays still.",
+    "--tag": "Your channel name or handle, shown small in a bottom corner of every clip, for example @mychannel.",
+    "--logo": "Path of an image, best a PNG with a clear background, shown in the bottom right corner.",
+    "--intro": "Path of a short video put in front of every clip. Keep it under 2 seconds: Shorts viewers "
+               "swipe away from slow starts.",
+    "--outro": "Path of a short video put after every clip, for example asking viewers to follow.",
 }
 
 
@@ -145,6 +164,25 @@ def number(value, low, high, whole=False):
     return int(n) if whole else n
 
 
+def shape_values(cam, ratio):
+    """A cam area ([x, y, w, h] shares of the frame, or None) and a shape ("9:16", or None), checked."""
+    if cam is not None:
+        if not (isinstance(cam, list) and len(cam) == 4 and all(isinstance(v, (int, float)) for v in cam)):
+            raise ValueError("cam")
+        cam = [round(float(v), 4) for v in cam]
+        try:
+            watcher.box(",".join(f"{v:g}" for v in cam))
+        except argparse.ArgumentTypeError:
+            raise ValueError("cam") from None
+    if ratio is not None:
+        try:
+            watcher.ratio(str(ratio))
+        except argparse.ArgumentTypeError:
+            raise ValueError("ratio") from None
+        ratio = str(ratio)
+    return cam, ratio
+
+
 class Stream:
     """One row of the board: a channel, its own spike settings, and the watcher.py process following it."""
 
@@ -153,12 +191,15 @@ class Stream:
         self.channel, self.kick, self.min, self.factor = channel, kick, minimum, factor
         self.proc, self.stopping, self.forced, self.exit = None, False, False, None
         self.stats, self.history, self.clips, self.last = None, [], 0, ""
+        self.cam, self.ratio = None, None  # set by hand in the cam editor; None means face detection / shared
+        self.frame, self.frames = None, 0  # newest still from watcher.py, and how many answers came
 
     def public(self):
         return {
             "id": self.id, "channel": self.channel, "kick": self.kick, "min": self.min, "factor": self.factor,
             "running": self.proc is not None, "stopping": self.stopping, "exit": self.exit,
             "stats": self.stats, "history": self.history, "clips": self.clips, "last": self.last,
+            "cam": self.cam, "ratio": self.ratio,
         }
 
     def tell(self, line):
@@ -188,13 +229,16 @@ class Board:
             self.shared = [a for a in shared if isinstance(a, str) and a.partition("=")[0] in FLAGS]
         for row in rows if isinstance(rows, list) else []:
             try:  # one damaged row must not cost the rows after it
-                self.add(f"{'kick.com' if row['kick'] else 'twitch.tv'}/{row['channel']}", row["min"], row["factor"],
-                         keep=False)
-            except (KeyError, TypeError):
+                if not self.add(f"{'kick.com' if row['kick'] else 'twitch.tv'}/{row['channel']}", row["min"],
+                                row["factor"], keep=False):
+                    stream = list(self.streams.values())[-1]
+                    stream.cam, stream.ratio = shape_values(row.get("cam"), row.get("ratio"))
+            except (KeyError, TypeError, ValueError, AttributeError):
                 pass
 
     def save(self):
-        streams = [{"channel": s.channel, "kick": s.kick, "min": s.min, "factor": s.factor} for s in self.streams.values()]
+        streams = [{"channel": s.channel, "kick": s.kick, "min": s.min, "factor": s.factor, "cam": s.cam, "ratio": s.ratio}
+                   for s in self.streams.values()]
         fresh = SAVED.with_name(SAVED.name + ".tmp")
         try:  # written beside the file and swapped in, so a kill half way never leaves a broken board
             fresh.write_text(json.dumps({"shared": self.shared, "streams": streams}, indent=1), encoding="utf-8")
@@ -269,10 +313,13 @@ class Board:
             stream.stopping, stream.forced, stream.exit, stream.stats, stream.history = False, False, None, None, []
             # started apart from our terminal: a Ctrl+C or a closed window here must not hit it as a signal;
             # it is stopped through its stdin alone, and losing that stdin stops it cleanly
+            own = [f"--min={stream.min}", f"--factor={stream.factor:g}"]
+            own += [f"--cam-box={','.join(f'{v:g}' for v in stream.cam)}"] if stream.cam else []
+            own += [f"--ratio={stream.ratio}"] if stream.ratio else []
             stream.proc = subprocess.Popen(
-                [sys.executable, "-u", str(HERE / "watcher.py"), "--stdin-control", link,
-                 f"--min={stream.min}", f"--factor={stream.factor:g}",
-                 *(a for a in self.shared if a.partition("=")[0] not in PER_STREAM)],
+                [sys.executable, "-u", str(HERE / "watcher.py"), "--stdin-control", link, *own,
+                 *(a for a in self.shared if a.partition("=")[0] not in PER_STREAM
+                   and not (stream.ratio and a.startswith("--ratio=")))],
                 cwd=HERE, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, errors="replace", **watcher.APART,
             )
@@ -289,6 +336,9 @@ class Board:
                     stream.stats = {"elapsed": int(elapsed), "msgs": int(msgs), "phase": phase, "threshold": threshold,
                                     "median": float(median) if median else None, "video": video == "recording"}
                     stream.history = (stream.history + [[int(msgs), threshold]])[-HISTORY:]
+                elif FRAME.match(line):
+                    path = FRAME.match(line)[1]
+                    stream.frame, stream.frames = None if path == "none" else path, stream.frames + 1
                 elif line:
                     clip = CLIP.search(line)
                     if clip:
@@ -326,6 +376,52 @@ class Board:
                 return
             except subprocess.TimeoutExpired:
                 last_resort()  # a stopping watcher takes a terminate as its second signal and quits with its helpers
+
+    def shape(self, stream_id, cam, ratio):
+        """Set a stream's cam area and clip shape by hand; a running stream uses them from its next clip."""
+        try:
+            cam, ratio = shape_values(cam, ratio)
+        except (ValueError, TypeError):
+            return "The cam area must lie inside the picture, and the shape must be like 9:16"
+        with self.lock:
+            stream = self.streams.get(stream_id)
+            if not stream:
+                return "That stream is not on the board"
+            stream.cam, stream.ratio = cam, ratio
+            self.save()
+            if stream.proc:
+                shared = next((a.partition("=")[2] for a in self.shared if a.startswith("--ratio=")), "9:16")
+                stream.tell("cam=" + (",".join(f"{v:g}" for v in cam) if cam else "auto"))
+                stream.tell(f"ratio={ratio or shared}")
+
+    def frame(self, stream_id):
+        """A fresh still of what the stream records, as JPEG bytes, or the reason there is none."""
+        with self.lock:
+            stream = self.streams.get(stream_id)
+            if not stream:
+                return None, "That stream is not on the board"
+            if not stream.proc:
+                return None, "Start the stream to get a picture of it"
+            asked = stream.frames
+            stream.tell("frame")
+        deadline = time.time() + 12
+        while time.time() < deadline:
+            with self.lock:
+                if stream.frames != asked:
+                    path = stream.frame
+                    break
+            time.sleep(0.1)
+        else:
+            return None, "No picture came; try again in a moment"
+        if not path:
+            return None, "Nothing recorded yet; try again once the row says recording"
+        picture = (HERE / path).resolve()
+        if picture.suffix.lower() != ".jpg" or (HERE / "rec").resolve() not in picture.parents:
+            return None, "No picture"
+        try:
+            return picture.read_bytes(), None
+        except OSError:
+            return None, "No picture came; try again in a moment"
 
     def tune(self, stream_id, minimum, factor):
         """Change a stream's own spike settings. A running stream uses them from its next count."""
@@ -400,6 +496,9 @@ def make_server(port=0):
             elif path == "/api/state":
                 since = parse_qs(query).get("since", ["0"])[0]
                 self.reply(200, board.state(int(since) if since.isdigit() else 0))
+            elif path == "/api/frame":
+                picture, error = board.frame(parse_qs(query).get("id", [""])[0])
+                self.reply(200, picture, "image/jpeg") if picture else self.reply(409, {"error": error})
             elif path == "/api/categories":
                 site = "kick" if parse_qs(query).get("site", [""])[0] == "kick" else "twitch"
                 try:
@@ -449,6 +548,8 @@ def make_server(port=0):
                 board.stop()
             elif self.path == "/api/tune":
                 error = board.tune(stream_id, body.get("min"), body.get("factor"))
+            elif self.path == "/api/shape":
+                error = board.shape(stream_id, body.get("cam"), body.get("ratio"))
             elif self.path == "/api/shared":
                 board.remember(shared or [])
             elif self.path == "/api/find":

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Record live Twitch or Kick streams and cut a vertical clip every time a chat spikes."""
 import argparse
+import copy
 import json
 import math
 import os
@@ -57,7 +58,8 @@ PDEATH = ("import ctypes, os, signal, sys\n"
           "os.execvp(sys.argv[1], sys.argv[1:])")
 
 STOP = threading.Event()  # set once to wind every channel down
-TUNE = {}  # "min" and "factor" changed while running (--stdin-control); they override the command line
+TUNE = {}  # "min", "factor", "ratio" and "cam_box" changed while running (--stdin-control); they override the command line
+RECORDERS = {}  # channel tag -> its Recorder, for the board's still pictures
 printing, shared = threading.Lock(), threading.Lock()
 children = set()  # every helper program now running, so a forced quit can take them all down
 backlog = 0  # clips of this run cut or about to be, and not finished yet
@@ -571,10 +573,19 @@ def even(v):
     return int(v) // 2 * 2
 
 
-def layout(w, h, face, o):
+def stacked(w, face, o, box=None):
+    """True when the clip gets a cam panel above or below the game."""
+    if o.face_h <= 0 or o.height < o.width:
+        return False
+    return bool(box) or face is not None and face[2] < w * o.big_face
+
+
+def layout(w, h, face, o, src="[0:v]", motion=lambda width, height: "", box=None):
     """ffmpeg filter graph that turns a w x h frame into o.width x o.height, built around the face when there is one.
 
     o.face_h is the height of the facecam panel; 0 or a landscape output means the panels are never stacked.
+    box is a cam area set by hand (x, y, w, h in pixels); it takes the place of the face. motion(width, height)
+    gives filters that move the main picture, appended once it has its final size.
     """
     out_w, out_h, face_h = o.width, o.height, o.face_h
 
@@ -585,30 +596,143 @@ def layout(w, h, face, o):
         return even(min(w, h * aspect)), even(min(h, w / aspect))
 
     def one(x, y):
-        return f"[0:v]crop={cw}:{ch}:{x}:{y},scale={out_w}:{out_h},setsar=1[v]"
+        return f"{src}crop={cw}:{ch}:{x}:{y},scale={out_w}:{out_h}{motion(out_w, out_h)},setsar=1[v]"
 
     cw, ch = crop(out_w / out_h)
     big = face is not None and face[2] >= w * o.big_face
-    if face is None or not big and (face_h <= 0 or out_h < out_w):
+    if not stacked(w, face, o, box):
+        if big:
+            fx, fy, fw, fh = face
+            return one(clamp(fx + fw / 2 - cw / 2, w - cw), clamp(fy + fh / 2 - ch / 2, h - ch))
         return one((w - cw) // 2, (h - ch) // 2)
-    fx, fy, fw, fh = face
-    if big:
-        return one(clamp(fx + fw / 2 - cw / 2, w - cw), clamp(fy + fh / 2 - ch / 2, h - ch))
-    tw = even(min(w, fw * o.face_zoom, h * out_w / face_h))
-    th = even(tw * face_h / out_w)
-    tx, ty = clamp(fx + fw / 2 - tw / 2, w - tw), clamp(fy + fh / 2 - th * 0.4, h - th)
+    aspect = out_w / face_h
+    if box:  # the smallest crop of the panel's shape that holds the whole box
+        bx, by, bw, bh = box
+        tw = min(w, max(bw, bh * aspect), h * aspect)
+        cx, cy = bx + bw / 2, by + bh / 2
+    else:
+        fx, fy, fw, fh = face
+        tw = min(w, fw * o.face_zoom, h * aspect)
+        cx, cy = fx + fw / 2, fy + fh / 2 + tw / aspect * 0.1  # the face a little above the middle
+    tw = even(tw)
+    th = even(tw / aspect)
+    tx, ty = clamp(cx - tw / 2, w - tw), clamp(cy - th / 2, h - th)
     gw, gh = crop(out_w / (out_h - face_h))
     return (
-        f"[0:v]split[a][b];[a]crop={tw}:{th}:{tx}:{ty},scale={out_w}:{face_h}[cam];"
-        f"[b]crop={gw}:{gh}:{(w - gw) // 2}:{(h - gh) // 2},scale={out_w}:{out_h - face_h}[game];"
+        f"{src}split[a][b];[a]crop={tw}:{th}:{tx}:{ty},scale={out_w}:{face_h}[cam];"
+        f"[b]crop={gw}:{gh}:{(w - gw) // 2}:{(h - gh) // 2},scale={out_w}:{out_h - face_h}"
+        f"{motion(out_w, out_h - face_h)}[game];"
         f"{'[cam][game]' if o.cam == 'top' else '[game][cam]'}vstack,setsar=1[v]"
     )
+
+
+def quote(path):
+    """A file name as an ffmpeg filter option value, Windows drive letters included."""
+    return "'" + str(path).replace("\\", "/").replace(":", "\\:").replace("'", "\\'") + "'"
+
+
+def streams(path):
+    """Kinds of streams in a media file ('video', 'audio'), the picture's frame rate, and its length in seconds."""
+    lines = run("ffprobe", "-v", "error", "-show_entries", "stream=codec_type,r_frame_rate:format=duration",
+                "-of", "csv=p=0", path).split()
+    kinds = {line.split(",")[0]: line.split(",")[-1] for line in lines if line.split(",")[0] in ("video", "audio")}
+    rate = kinds.get("video", "30/1")
+    try:
+        seconds = float(lines[-1])
+    except (IndexError, ValueError):
+        seconds = 0.0
+    return set(kinds), rate if re.fullmatch(r"\d+/[1-9]\d*", rate) and not rate.startswith("0/") else "30/1", seconds
+
+
+def edit(w, h, face, o, cut, length, spike, rate, sound, subs=None, hook=None, tag=None, extras=()):
+    """The whole filter graph of a clip, ending in [v] and [a]: the layout, then the channel's own edits.
+
+    cut: seconds dropped from the front of the raw cut; length: seconds left; spike: when chat spiked, in clip
+    time; rate: frame rate; sound: whether the cut has sound. subs, hook and tag are files: captions to burn in,
+    the title line, the channel tag. extras: (input index, kind, has sound, seconds) per logo, intro or outro.
+    """
+    box = None
+    if o.cam_box:
+        bx, by, bw, bh = o.cam_box
+        box = (bx * w, by * h, bw * w, bh * h)
+
+    def motion(width, height):
+        if o.zoom <= 0:
+            return ""
+        # a slow push-in over the whole clip, and a quick punch-in on the moment chat spiked
+        z = (f"1+{o.zoom / 2:g}*it/{max(length, 1):.3f}"
+             f"+{o.zoom:g}*clip((it-{spike - 0.15:.3f})/0.15\\,0\\,1)*clip(({spike + 1:.3f}-it)/0.4\\,0\\,1)")
+        return f",zoompan=z='{z}':d=1:x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':s={width}x{height}:fps={rate}"
+
+    W, H = o.width, o.height
+    top = o.face_h if o.cam == "top" and stacked(w, face, o, box) else 0
+    graph = [f"[0:v]trim=start={cut:.3f},setpts=PTS-STARTPTS[base]", layout(w, h, face, o, "[base]", motion, box)[:-3] + "[lay]"]
+    chain = []
+    if subs:
+        chain.append(f"subtitles={quote(subs)}:force_style='FontName=Arial,Fontsize={o.caption_size * 2.88:.1f},"
+                     "Bold=1,Outline=3,Shadow=0,Alignment=2,MarginV=72'")
+    if hook:
+        size = max(12, min(round(H * 0.045), round(W * 1.6 / max(len(hook.read_text(encoding="utf-8")), 1))))
+        chain.append(f"drawtext=textfile={quote(hook)}:expansion=none:font=Arial:fontsize={size}:fontcolor=white:"
+                     f"box=1:boxcolor=black@0.6:boxborderw={size // 3}:x=(w-text_w)/2:"
+                     f"y={top + round(H * 0.025) if top else round(H * 0.06)}:enable='lt(t,{o.hook_secs:g})'")
+    if tag:
+        chain.append(f"drawtext=textfile={quote(tag)}:expansion=none:font=Arial:fontsize={round(H * 0.024)}:"
+                     f"fontcolor=white@0.85:borderw=2:x={round(W * 0.04)}:y=h-th-{round(H * 0.03)}")
+    graph.append("[lay]" + (",".join(chain) or "null") + ",format=yuv420p[vm]")
+    video = "[vm]"
+    for i, kind, _, _ in extras:
+        if kind == "logo":
+            graph.append(f"[{i}:v]scale={even(W * 0.18)}:-1[logo];{video}[logo]overlay=W-w-{round(W * 0.04)}:"
+                         f"H-h-{round(H * 0.03)},format=yuv420p[vl]")
+            video = "[vl]"
+    graph.append(f"[0:a]atrim=start={cut:.3f},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo[am]"
+                 if sound else f"anullsrc=r=48000:cl=stereo,atrim=duration={length:.3f}[am]")
+    parts = []
+    for i, kind, has_sound, seconds in extras:
+        if kind not in ("intro", "outro"):
+            continue
+        graph.append(f"[{i}:v]scale={W}:{H}:force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,"
+                     f"setsar=1,fps={rate},format=yuv420p[v{kind}]")
+        graph.append(f"[{i}:a]aresample=48000,aformat=channel_layouts=stereo[a{kind}]" if has_sound
+                     else f"anullsrc=r=48000:cl=stereo,atrim=duration={seconds:.3f}[a{kind}]")
+        parts.append((kind, f"[v{kind}][a{kind}]"))
+    order = [p for k, p in parts if k == "intro"] + [video + "[am]"] + [p for k, p in parts if k == "outro"]
+    if len(order) == 1:
+        graph.append(f"{video}null[v];[am]anull[a]")
+    else:
+        graph.append(f"{''.join(order)}concat=n={len(order)}:v=1:a=1[v][a]")
+    return ";".join(graph)
+
+
+def shape(o):
+    """Work out the clip's pixel size and cam panel height from its ratio, height and cam settings."""
+    o.height = even(o.height)
+    o.width = max(2, even(o.height * o.ratio))
+    o.face_h = 0 if o.cam == "off" else even(o.height * o.face_share)
+    return o
+
+
+def clip_options(args):
+    """The settings for one clip: the command line, with what the board changed while running."""
+    o = copy.copy(args)
+    if "ratio" in TUNE:
+        o.ratio = TUNE["ratio"]
+    if "cam_box" in TUNE:
+        o.cam_box = TUNE["cam_box"]
+    return shape(o)
+
+
+def opening(text, words=6, chars=40):
+    """The first few words of what was said, for a title line."""
+    out = " ".join(text.split()[:words])
+    return out if len(out) <= chars else out[:chars].rsplit(" ", 1)[0]
 
 
 def make_clip(recorder, out, source, args, lag, noticed):
     """Cut, crop, subtitle and maybe upload the clip around a spike noticed at wall-clock time `noticed`."""
     global backlog
-    tag = recorder.tag
+    tag, o = recorder.tag, clip_options(args)
     moment = noticed - lag  # when chat really spiked: Kick chat is counted `lag` seconds late
     raw, part = RUN / f"{out.stem}.cut.ts", RUN / f"{out.stem}.part.mp4"
     try:
@@ -643,16 +767,48 @@ def make_clip(recorder, out, source, args, lag, noticed):
                         "stream=start_time:format=start_time,duration", "-of", "csv=p=0", raw).split()
             # the last two words: where the picture starts, then where the cut starts and how long it is
             picture, (began, real) = float(probe[-2]), map(float, probe[-1].split(","))
-            ffmpeg("-i", raw, "-ss", max(0, real - keep, picture - began), "-filter_complex", layout(w, h, face, args),
-                   "-map", "[v]", "-map", "0:a?", "-c:v", "libx264", "-crf", args.crf, "-c:a", "aac", part)
+            cut = max(0, real - keep, picture - began)
+            length = real - cut
+            spike = min(max(length - (start + duration - moment), 0), length)  # in clip time
+            kinds, rate, _ = streams(raw)
+            channel = source.rsplit("/", 1)[-1]
+            srt, said = RUN / f"{out.stem}.srt", ""
+            if o.captions != "off" or "{text}" in o.hook:
+                wav = RUN / f"{out.stem}.wav"
+                try:
+                    ffmpeg("-i", raw, "-ss", cut, "-vn", "-ac", "1", "-ar", "16000", wav)
+                    run(sys.executable, "-m", "whisper", wav, "--model", o.model, "--output_format", "srt",
+                        "--output_dir", RUN, "--verbose", "False", "--fp16", "False",
+                        *(["--word_timestamps", "True", "--max_words_per_line", "3", "--hallucination_silence_threshold", "2",
+                          "--condition_on_previous_text", "False"] if o.captions == "burn" else []),
+                        *(["--language", o.language] if o.language else []))
+                    said = upload.transcript(srt)
+                except RuntimeError as e:
+                    log(tag, f"no subtitles for {out.name} ({e})")
+            files = {}
+            for kind, text in (("hook", o.hook.format(text=opening(said), channel=channel).strip()
+                                if said or "{text}" not in o.hook else ""), ("tag", o.tag or "")):
+                if text:
+                    files[kind] = RUN / f"{out.stem}.{kind}.txt"
+                    files[kind].write_text(text, encoding="utf-8")
+            extras, inputs = [], []
+            for kind in ("logo", "intro", "outro"):
+                path = getattr(o, kind)
+                if path:
+                    found, _, seconds = streams(path) if kind != "logo" else (set(), "", 0)
+                    extras.append((len(inputs) // 2 + 1, kind, "audio" in found, seconds))  # inputs: -i, file
+                    inputs += ["-i", path]
+            graph = edit(w, h, face, o, cut, length, spike, rate, "audio" in kinds,
+                         srt if o.captions == "burn" and said else None,  # ffmpeg refuses an empty .srt
+                         files.get("hook"), files.get("tag"), extras)
+            ffmpeg("-i", raw, *inputs, "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
+                   "-c:v", "libx264", "-crf", o.crf, "-c:a", "aac", part)
             shutil.move(part, out)
-            try:
-                run(sys.executable, "-m", "whisper", out, "--model", args.model, "--output_format", "srt",
-                    "--output_dir", out.parent, "--verbose", "False", "--fp16", "False",
-                    *(["--language", args.language] if args.language else []))
+            if o.captions != "off" and said:
+                shutil.move(srt, out.with_suffix(".srt"))
                 log(tag, f"saved {out} and {out.with_suffix('.srt').name}")
-            except RuntimeError as e:
-                log(tag, f"saved {out} without subtitles ({e})")
+            else:
+                log(tag, f"saved {out}")
             if args.upload:
                 upload.publish(out, source, args.privacy, args.title, args.description, lambda text: log(tag, text))
         finally:
@@ -663,7 +819,7 @@ def make_clip(recorder, out, source, args, lag, noticed):
     finally:
         with shared:
             backlog -= 1
-        for leftover in (raw, part):
+        for leftover in RUN.glob(f"{out.stem}.*"):  # the cut, the part, the speech, the text files
             leftover.unlink(missing_ok=True)
 
 
@@ -672,7 +828,7 @@ def watch(tag, channel, kick, minimum, args, index):
     global backlog
     source = f"kick.com/{channel}" if kick else f"twitch.tv/{channel}"
     lag = KICK_LAG if kick else 0
-    recorder = Recorder(tag, source, args, lag, index)
+    recorder = RECORDERS[tag] = Recorder(tag, source, args, lag, index)
     cooldown = args.before + args.after if args.cooldown is None else args.cooldown
     warm = max(1, math.ceil(args.warmup / args.bucket))
     history, seen, count, blind = deque(maxlen=max(1, args.window // args.bucket)), 0, 0, False
@@ -755,6 +911,19 @@ def ratio(text):
     return int(m[1]) / int(m[2])
 
 
+def box(text):
+    """A cam area as x,y,w,h, each a share of the frame from 0 to 1; 'auto' or nothing means face detection."""
+    if text in ("", "auto"):
+        return None
+    try:
+        x, y, w, h = (float(v) for v in text.split(","))
+    except ValueError:
+        raise argparse.ArgumentTypeError("use x,y,w,h as shares of the frame, for example 0.7,0.05,0.25,0.3") from None
+    if not (0 <= x and 0 <= y and 0.01 <= w and 0.01 <= h and x + w <= 1.001 and y + h <= 1.001):
+        raise argparse.ArgumentTypeError("the cam area must lie inside the frame")
+    return x, y, w, h
+
+
 def build_parser():
     p = argparse.ArgumentParser(
         description=__doc__,
@@ -801,6 +970,8 @@ def build_parser():
                       help="picture quality from 0 to 51; lower looks better and makes bigger files")
     clip.add_argument("--cam", default="top", choices=["top", "bottom", "off"],
                       help="where the streamer's cam panel sits; off keeps one picture")
+    clip.add_argument("--cam-box", type=box, metavar="X,Y,W,H",
+                      help="cam area set by hand, as shares of the frame; empty uses face detection")
     clip.add_argument("--face-share", type=float, default=1 / 3,
                       help="part of the clip height the cam panel takes, from 0 to 1")
     clip.add_argument("--face-zoom", type=float, default=4,
@@ -812,6 +983,20 @@ def build_parser():
     clip.add_argument("--language", help="language spoken on stream, for example en; empty detects it")
     clip.add_argument("--jobs", type=int, default=1,
                       help="clips encoded and transcribed at once, counted over every clip-watcher in this folder")
+    own = p.add_argument_group("your edits")
+    own.add_argument("--captions", default="burn", choices=["burn", "file", "off"],
+                     help="burn the words into the video, only save them as .srt, or neither")
+    own.add_argument("--caption-size", type=float, default=6, help="caption text height, as a percent of the clip height")
+    own.add_argument("--hook", default="{text}",
+                     help="title line at the top for the first seconds; {text} is what was said, {channel} the channel; "
+                          "empty means none")
+    own.add_argument("--hook-secs", type=float, default=3, help="how long the title line stays")
+    own.add_argument("--zoom", type=float, default=0.12,
+                     help="how far the picture punches in at the spike, with a slow push-in over the clip; 0 is none")
+    own.add_argument("--tag", help="your channel name, shown small in a corner; empty means none")
+    own.add_argument("--logo", help="image file shown in a corner, for example a PNG of your logo")
+    own.add_argument("--intro", help="video file put in front of every clip")
+    own.add_argument("--outro", help="video file put after every clip")
     yt = p.add_argument_group("YouTube")
     yt.add_argument("--upload", action="store_true", help="upload every clip to YouTube Shorts")
     yt.add_argument("--privacy", default="private", choices=["private", "unlisted", "public"],
@@ -848,8 +1033,27 @@ def claim_run_folder():
     return lock_file(RUN / "lock"), freed
 
 
+def grab_frames():
+    """A still of what each channel is recording right now, for the board's cam editor."""
+    for tag, recorder in list(RECORDERS.items()):
+        now, path = time.time(), RUN / f"frame-{tag}.jpg"
+        held = recorder.acquire(now - 20, now)
+        try:
+            if not held:
+                raise RuntimeError("no video yet")
+            ffmpeg("-sseof", "-3", "-i", held[0].path, "-frames:v", "1", "-vf", "scale=-2:540", "-q:v", "4", path)
+            log(tag, f"frame {path}")
+        except RuntimeError:
+            log(tag, "frame none")
+        finally:
+            if held:
+                recorder.release(held[0], cut_done=False)
+
+
 def control():
-    """Commands from the settings page, one per line on stdin: stop, quit, min=<n>, factor=<x>.
+    """Commands from the settings page, one per line on stdin.
+
+    stop, quit, min=<n>, factor=<x>, ratio=<w:h>, cam=<x,y,w,h or auto>, and frame (a still of each channel).
 
     Losing stdin means the page is gone, which also stops us.
     """
@@ -859,11 +1063,17 @@ def control():
             quit_now()
         elif key == "stop":
             STOP.set()  # and keep listening: "quit" may follow
-        elif key in ("min", "factor"):
-            try:
+        elif key == "frame":
+            threading.Thread(target=grab_frames, daemon=True).start()
+        try:
+            if key in ("min", "factor"):
                 TUNE[key] = int(value) if key == "min" else float(value)
-            except ValueError:
-                pass
+            elif key == "ratio":
+                TUNE["ratio"] = ratio(value)
+            elif key == "cam":
+                TUNE["cam_box"] = box(value)
+        except (ValueError, argparse.ArgumentTypeError):
+            pass
     STOP.set()
 
 
@@ -901,9 +1111,16 @@ def main():
         p.error("--before, --after, --warmup and --overlap-secs cannot be negative")
     if args.window < args.bucket or args.height < 16 or not 0 <= args.face_share < 1:
         p.error("need --window >= --bucket, --height >= 16 and 0 <= --face-share < 1")
-    args.height = even(args.height)
-    args.width = max(2, even(args.height * args.ratio))
-    args.face_h = 0 if args.cam == "off" else even(args.height * args.face_share)
+    shape(args)
+    for kind in ("logo", "intro", "outro"):
+        if getattr(args, kind) and not Path(getattr(args, kind)).is_file():
+            p.error(f"--{kind}: no file {getattr(args, kind)}")
+    if args.zoom < 0 or args.caption_size <= 0 or args.hook_secs < 0:
+        p.error("--zoom and --hook-secs cannot be negative, and --caption-size must be above 0")
+    try:
+        args.hook.format(text="x", channel="x")
+    except (KeyError, IndexError, ValueError):
+        p.error("--hook may only use {text} and {channel}")
     try:
         upload.describe("x", "x", args.title, args.description)
     except (KeyError, IndexError, ValueError):

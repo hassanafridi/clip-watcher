@@ -101,6 +101,23 @@ main { max-width: 1440px; margin: 0 auto; padding: 32px; display: grid; gap: 40p
 .acts { display: flex; gap: 8px; justify-content: flex-end; }
 .stream button { height: 32px; padding: 0 12px; min-width: 76px; }
 .empty { margin: 0; padding: 24px 0; color: var(--text-2); border-bottom: 1px solid var(--line); max-width: 72ch; }
+.shaper {
+  display: grid; grid-template-columns: minmax(0, 560px) minmax(220px, 1fr); gap: 16px 24px; align-items: start;
+  margin: 12px 0; padding: 16px; background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+}
+.shot { position: relative; aspect-ratio: 16 / 9; background: var(--raised); border-radius: 8px; overflow: hidden; touch-action: none; user-select: none; }
+.shot img { display: block; width: 100%; height: 100%; }
+.shot .none[hidden], .shot img[hidden] { display: none; }
+.shot .none { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; color: var(--text-2); text-align: center; }
+.shot .box { position: absolute; border: 2px solid var(--cam); background: color-mix(in srgb, var(--cam) 18%, transparent); cursor: move; }
+.shot .box.off { border-style: dashed; opacity: 0.5; }
+.shot .grip { position: absolute; right: -8px; bottom: -8px; width: 16px; height: 16px; border-radius: 4px; background: var(--cam); cursor: nwse-resize; }
+.side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.side h3 { margin: 0; font: 500 16px/20px var(--display); }
+.side label { display: block; color: var(--muted); font-size: 12px; line-height: 16px; margin-bottom: 4px; }
+.side select { max-width: 240px; }
+.side canvas { align-self: flex-start; border: 2px solid var(--text); border-radius: 8px; background: var(--raised); }
+.side p { margin: 0; color: var(--text-2); font-size: 13px; max-width: 48ch; }
 .find { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 16px; }
 .find label { color: var(--text-2); }
 .find select { width: 104px; }
@@ -167,6 +184,7 @@ aside h2 { margin-bottom: 16px; }
   aside { position: static; }
 }
 @media (max-width: 860px) {
+  .shaper { grid-template-columns: minmax(0, 1fr); }
   main { padding: 16px; gap: 32px; }
   .bar { padding: 12px 16px; position: static; }
   .status { margin-left: 0; }
@@ -404,6 +422,160 @@ function preview() {
   );
 }
 
+// ---- the cam editor: where the streamer's cam is, and the clip's shape, for one stream ----
+
+let shaper = null;
+const SHAPES = ["9:16", "4:5", "3:4", "1:1", "16:9"];
+function closeShaper() {
+  if (!shaper) return;
+  if (shaper.url) URL.revokeObjectURL(shaper.url);
+  shaper.root.remove();
+  shaper = null;
+}
+function openShaper(id) {
+  const r = rows.get(id), open = shaper && shaper.id === id;
+  closeShaper();
+  if (open || !r) return;
+  const s = r.data, img = el("img", {alt: "What " + s.channel + " is recording now"});
+  const ed = shaper = {
+    id, img, url: null,
+    box: s.cam ? {x: s.cam[0], y: s.cam[1], w: s.cam[2], h: s.cam[3]} : {x: 0.02, y: 0.04, w: 0.26, h: 0.26},
+    frame: el("div", {className: "box", tabIndex: 0, role: "slider",
+                      ariaLabel: "Cam area. Arrow keys move it, Shift with arrow keys changes its size"}),
+    none: el("div", {className: "none"}, "Start the stream to see a picture. The shape can be set now."),
+    shape: el("select", {id: "shape-" + id}),
+    canvas: el("canvas", {width: 108, height: 192, role: "img"}),
+    note: el("p", {ariaLive: "polite"}),
+  };
+  ed.frame.append(el("span", {className: "grip"}));
+  ed.shape.append(el("option", {value: ""}, "Same as the settings"), ...SHAPES.map(v => el("option", {value: v}, v)));
+  ed.shape.value = s.ratio || "";
+  ed.shot = el("div", {className: "shot"}, img, ed.none, ed.frame);
+  img.hidden = true;
+  const save = el("button", {className: "go"}, "Save"), auto = el("button", {}, "Use face detection");
+  const again = el("button", {}, "New picture"), close = el("button", {}, "Close");
+  ed.root = el("div", {className: "shaper"}, ed.shot, el("div", {className: "side"},
+    el("h3", {}, "Cam and shape of " + s.channel),
+    el("div", {}, el("label", {htmlFor: ed.shape.id}, "Shape of this stream's clips"), ed.shape),
+    ed.canvas, ed.note,
+    el("div", {className: "tools"}, save, auto, again, close)));
+  r.root.after(ed.root);
+  img.onload = () => {
+    ed.shot.style.aspectRatio = img.naturalWidth + " / " + img.naturalHeight;
+    img.hidden = false;
+    ed.none.hidden = true;
+    fit();
+  };
+  ed.shape.onchange = fit;
+  ed.frame.onpointerdown = event => drag(event, event.target.classList.contains("grip") ? "size" : "move");
+  ed.frame.onkeydown = event => {
+    const step = {ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1]}[event.key];
+    if (!step) return;
+    event.preventDefault();
+    const b = ed.box;
+    if (event.shiftKey) place(b.x, b.y, b.w + (step[0] - step[1]) * 0.01);
+    else place(b.x + step[0] * 0.01, b.y + step[1] * 0.01, b.w);
+  };
+  save.onclick = () => store([ed.box.x, ed.box.y, ed.box.w, ed.box.h].map(v => Math.round(v * 10000) / 10000),
+                             "Saved. The next clips of " + s.channel + " use this cam area and shape.");
+  auto.onclick = () => store(null, "Saved. The next clips of " + s.channel + " find the streamer's face on their own.");
+  again.onclick = shoot;
+  close.onclick = closeShaper;
+  fit();
+  if (s.running) shoot();
+  ed.frame.focus();
+}
+// the clip's shape, and the cam panel's shape in picture terms, from the shape picked and the shared settings
+function plan() {
+  const m = /^(\d+):(\d+)$/.exec(shaper.shape.value || read("--ratio")) || [0, 9, 16];
+  const ratio = m[1] / m[2], share = Number(read("--face-share")) || 1 / 3, cam = read("--cam");
+  const img = shaper.img, pw = img.naturalWidth || 16, ph = img.naturalHeight || 9;
+  return {ratio, share, cam, pw, ph, stacked: cam !== "off" && share > 0 && share < 1 && ratio <= 1, panel: ratio / share};
+}
+function place(x, y, w) {
+  const p = plan(), k = p.pw / (p.ph * p.panel);  // box height per width, as shares of the picture
+  w = Math.min(Math.max(w, 0.04), 1, 1 / k);
+  const h = w * k;
+  shaper.box = {x: Math.min(Math.max(x, 0), 1 - w), y: Math.min(Math.max(y, 0), 1 - h), w, h};
+  const f = shaper.frame.style, b = shaper.box;
+  f.left = b.x * 100 + "%"; f.top = b.y * 100 + "%"; f.width = b.w * 100 + "%"; f.height = b.h * 100 + "%";
+  shaper.frame.setAttribute("aria-valuetext", `left ${Math.round(b.x * 100)}%, top ${Math.round(b.y * 100)}%, width ${Math.round(b.w * 100)}%`);
+  draw();
+}
+function fit() {
+  const p = plan();
+  shaper.frame.classList.toggle("off", !p.stacked);
+  shaper.note.textContent = p.stacked
+    ? "Drag the box over the streamer's cam, and drag its corner to size it. Its shape follows the cam panel."
+    : "This shape has no cam panel: the clip is one picture, so the box is not used.";
+  place(shaper.box.x, shaper.box.y, shaper.box.w);
+}
+function drag(event, mode) {
+  event.preventDefault();
+  const rect = shaper.shot.getBoundingClientRect(), start = {...shaper.box}, x0 = event.clientX, y0 = event.clientY;
+  const move = e => {
+    const dx = (e.clientX - x0) / rect.width, dy = (e.clientY - y0) / rect.height;
+    if (mode === "move") place(start.x + dx, start.y + dy, start.w); else place(start.x, start.y, start.w + dx);
+  };
+  const up = () => { removeEventListener("pointermove", move); removeEventListener("pointerup", up); };
+  addEventListener("pointermove", move);
+  addEventListener("pointerup", up);
+}
+// the clip as it will come out: the cam panel cut from the box, the game cut from the middle
+function draw() {
+  const p = plan(), c = shaper.canvas, ctx = c.getContext("2d"), img = shaper.img, b = shaper.box;
+  c.height = 192; c.width = Math.round(192 * Math.min(p.ratio, 1)) || 108;
+  if (p.ratio > 1) { c.width = 192; c.height = Math.round(192 / p.ratio); }
+  const W = c.width, H = c.height, ready = !img.hidden;
+  const crop = (aspect, cx, cy) => {
+    const w = Math.min(p.pw, p.ph * aspect), h = w / aspect;
+    return [Math.min(Math.max(cx - w / 2, 0), p.pw - w), Math.min(Math.max(cy - h / 2, 0), p.ph - h), w, h];
+  };
+  const paint = (src, y, h, label) => {
+    if (ready) { ctx.drawImage(img, ...src, 0, y, W, h); return; }
+    ctx.fillStyle = label === "Streamer cam" ? getComputedStyle(document.body).getPropertyValue("--cam") : "#888";
+    ctx.fillRect(0, y, W, h);
+  };
+  ctx.clearRect(0, 0, W, H);
+  if (!p.stacked) {
+    paint(crop(p.ratio, p.pw / 2, p.ph / 2), 0, H, "Game");
+  } else {
+    const camH = Math.round(H * p.share), bw = b.w * p.pw, bh = b.h * p.ph;
+    const tw = Math.min(p.pw, Math.max(bw, bh * p.panel), p.ph * p.panel);
+    const th = tw / p.panel, cx = b.x * p.pw + bw / 2, cy = b.y * p.ph + bh / 2;
+    const cam = [Math.min(Math.max(cx - tw / 2, 0), p.pw - tw), Math.min(Math.max(cy - th / 2, 0), p.ph - th), tw, th];
+    const top = p.cam === "top";
+    paint(cam, top ? 0 : H - camH, camH, "Streamer cam");
+    paint(crop(p.ratio / (1 - p.share), p.pw / 2, p.ph / 2), top ? camH : 0, H - camH, "Game");
+  }
+  c.setAttribute("aria-label", "Preview of the clip layout");
+}
+async function shoot() {
+  const ed = shaper;
+  ed.note.textContent = "Getting a picture of the stream";
+  try {
+    const response = await fetch("/api/frame?id=" + encodeURIComponent(ed.id), {headers: {"X-Token": token}});
+    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || response.statusText);
+    const blob = await response.blob();
+    if (shaper !== ed) return;
+    if (ed.url) URL.revokeObjectURL(ed.url);
+    ed.url = URL.createObjectURL(blob);
+    ed.img.src = ed.url;
+  } catch (error) {
+    if (shaper === ed) ed.note.textContent = error.message === "Failed to fetch" ? "clip-watcher is not running any more" : error.message;
+  }
+}
+async function store(cam, done) {
+  const ed = shaper;
+  try {
+    await api("/api/shape", {id: ed.id, cam, ratio: ed.shape.value || null});
+    if (shaper === ed) ed.note.textContent = done;
+    show(await api("/api/state?since=" + next));
+  } catch (error) {
+    if (shaper === ed) ed.note.textContent = error.message;
+  }
+}
+
 // ---- the board: one row per stream ----
 
 const span = seconds => seconds < 90 ? `${seconds} s` : seconds < 5400 ? `${Math.round(seconds / 60)} min`
@@ -427,6 +599,7 @@ function addRow(stream) {
     msgs, median, threshold, min: min.input, factor: factor.input,
     chart: el("div", {className: "chart", role: "img"}), made: el("div", {className: "made"}),
     toggle: el("button", {}), remove: el("button", {}, "Remove"),
+    shape: el("button", {title: "Set where the streamer's cam is and the shape of this stream's clips"}, "Cam & shape"),
   };
   // a stream that is already stopping can be told to quit at once. That is the only request that drops clips,
   // so it is asked first; the question also catches the second click of a double-click on Stop
@@ -440,7 +613,8 @@ function addRow(stream) {
     r.chart,
     el("div", {className: "tune"}, min.node, factor.node),
     r.made,
-    el("div", {className: "acts"}, r.toggle, r.remove));
+    el("div", {className: "acts"}, r.shape, r.toggle, r.remove));
+  r.shape.onclick = () => openShaper(stream.id);
   $("streams").append(r.root);
   rows.set(stream.id, r);
   return r;
@@ -493,6 +667,8 @@ function paint(r, s) {
   r.toggle.className = s.running && !s.stopping ? "halt" : s.running ? "" : "go";
   r.toggle.title = s.stopping ? "Quit this stream at once and drop the clips it is still finishing" : "";
   r.remove.disabled = s.running;
+  r.data = s;
+  r.shape.textContent = s.cam || s.ratio ? "Cam & shape *" : "Cam & shape";
 }
 
 function show(state) {
@@ -504,7 +680,7 @@ function show(state) {
   if (pinned && fresh.length) log.scrollTop = log.scrollHeight;
   next = Math.max(next, state.next);
   const seen = new Set(state.streams.map(s => s.id));
-  for (const [id, r] of rows) if (!seen.has(id)) { r.root.remove(); rows.delete(id); }
+  for (const [id, r] of rows) if (!seen.has(id)) { if (shaper && shaper.id === id) closeShaper(); r.root.remove(); rows.delete(id); }
   for (const s of state.streams) paint(rows.get(s.id) || addRow(s), s);
   $("empty").hidden = state.streams.length > 0;
   const running = state.streams.filter(s => s.running), recording = running.filter(s => s.stats && s.stats.video);
