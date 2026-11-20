@@ -14,4 +14,7 @@ PYTHON=$(command -v python || command -v python3)
 if [ -z "$1" ]; then
     exec "$PYTHON" gui.py
 fi
+if [ "$1" = "--lan" ]; then
+    exec "$PYTHON" gui.py --lan
+fi
 exec "$PYTHON" watcher.py "$@"

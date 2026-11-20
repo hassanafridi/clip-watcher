@@ -9,6 +9,8 @@ if exist "venv\Scripts\activate.bat" (
 
 if "%~1"=="" (
     python gui.py
+) else if "%~1"=="--lan" (
+    python gui.py --lan
 ) else (
     python watcher.py %*
 )

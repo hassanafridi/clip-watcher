@@ -5,6 +5,7 @@ import json
 import os
 import re
 import secrets
+import socket
 import subprocess
 import sys
 import threading
@@ -800,9 +801,50 @@ class Board:
             }
 
 
-def make_server(port=0):
-    """HTTP server on 127.0.0.1 plus the secret its page must send with every request."""
+def lan_addresses():
+    """This machine's addresses on the local network, e.g. 192.168.1.20."""
+    found = set()
+    try:
+        found.update(a for a in socket.gethostbyname_ex(socket.gethostname())[2] if not a.startswith("127."))
+    except OSError:
+        pass
+    try:  # the address used to reach the router; no packet is sent
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("192.168.0.1", 9))
+            found.add(probe.getsockname()[0])
+    except OSError:
+        pass
+    try:  # the address used to reach the router comes first: that is the one phones on the Wi-Fi can reach
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("192.168.0.1", 9))
+            main = probe.getsockname()[0]
+    except OSError:
+        main = ""
+    return sorted((a for a in found if not a.startswith("127.")), key=lambda a: a != main)
+
+
+def phone_key():
+    """The secret part of the phone link; kept in phone_key.txt so a bookmark keeps working across restarts."""
+    path = HERE / "phone_key.txt"
+    try:
+        key = path.read_text(encoding="utf-8").strip()
+        if len(key) >= 20:
+            return key
+    except OSError:
+        pass
+    key = secrets.token_urlsafe(18)
+    path.write_text(key, encoding="utf-8")
+    return key
+
+
+def make_server(port=0, lan_key=None):
+    """HTTP server plus the secret its page must send with every request.
+
+    Without lan_key it answers this machine only. With it, it also listens on the local network, and a
+    device there gets the page only with ?key=<lan_key> in the link.
+    """
     token, board = secrets.token_urlsafe(16), Board()
+    ours = lan_addresses() if lan_key else []
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -820,8 +862,17 @@ def make_server(port=0):
             self.wfile.write(data)
 
         def local(self):
+            """Asked for by one of our own names: stops DNS rebinding."""
             return self.headers.get("Host", "") in (f"127.0.0.1:{self.server.server_port}",
-                                                    f"localhost:{self.server.server_port}")
+                                                    f"localhost:{self.server.server_port}") or (
+                self.headers.get("Host", "") in {f"{a}:{self.server.server_port}" for a in ours})
+
+        def may_have_page(self, query):
+            """This machine always; another device on the network only with the phone link's key."""
+            if self.client_address[0].startswith("127."):
+                return True
+            given = parse_qs(query).get("key", [""])[0]
+            return bool(lan_key) and secrets.compare_digest(given.encode(), lan_key.encode())
 
         def allowed(self):
             # the page we serve carries the token and other websites cannot read that page, so they
@@ -840,7 +891,7 @@ def make_server(port=0):
         def show(self):
             path, _, query = self.path.partition("?")
             if path == "/":
-                if not self.local():
+                if not self.local() or not self.may_have_page(query):
                     return self.reply(403, {"error": "Not found."})
                 page = PAGE.read_text(encoding="utf-8").replace("__TOKEN__", token)
                 self.reply(200, page.encode(), "text/html; charset=utf-8")
@@ -954,7 +1005,7 @@ def make_server(port=0):
         # on Windows address reuse would let a second clip-watcher bind the same port and steal requests
         allow_reuse_address = sys.platform != "win32"
 
-    httpd = Server(("127.0.0.1", port), Handler)
+    httpd = Server(("0.0.0.0" if lan_key else "127.0.0.1", port), Handler)
     httpd.board = board
     return httpd, token
 
@@ -963,10 +1014,13 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--port", type=int, default=PORT, help=f"port to serve on (default {PORT})")
     p.add_argument("--no-browser", action="store_true", help="print the link instead of opening a browser")
+    p.add_argument("--lan", action="store_true",
+                   help="also open the board to phones on the same Wi-Fi, through a secret link")
     args = p.parse_args()
     url = f"http://127.0.0.1:{args.port}/"
+    key = phone_key() if args.lan else None
     try:
-        httpd, _ = make_server(args.port)
+        httpd, _ = make_server(args.port, key)
     except OSError:
         # most likely clip-watcher is already running: show that one instead of starting a second
         print(f"Port {args.port} is in use. If clip-watcher is already running, its page is {url}", flush=True)
@@ -974,6 +1028,12 @@ def main():
             webbrowser.open(url)
         return
     print(f"clip-watcher streams board: {url}\nKeep this window open. Ctrl+C quits.", flush=True)
+    if key:
+        links = [f"http://{a}:{args.port}/?key={key}" for a in lan_addresses()]
+        for link in links:
+            print(f"On your phone (same Wi-Fi): {link}", flush=True)
+            httpd.board.say(f"[clip-watcher] on your phone (same Wi-Fi): {link}")
+        print("Keep that link private: anyone with it on your network can use the board.", flush=True)
     if not args.no_browser:
         webbrowser.open(url)
     try:

@@ -8,4 +8,5 @@ token.json
 streams.json
 *.onnx
 apps.json
+phone_key.txt
 brand/

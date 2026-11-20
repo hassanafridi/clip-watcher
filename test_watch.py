@@ -1315,6 +1315,37 @@ with tempfile.TemporaryDirectory() as folder:
     FakeChild.made[-1].gone.set()
     httpd.shutdown()
 
+# --- phone mode: the board on the local network, the page only through the secret link ---
+lan = gui.lan_addresses()
+if lan:
+    with tempfile.TemporaryDirectory() as folder:
+        gui.SAVED, gui.CLIPS = Path(folder) / "streams.json", Path(folder) / "clips"
+        key = "k" * 24
+        httpd, token = gui.make_server(0, key)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        there = f"http://{lan[0]}:{httpd.server_port}"
+
+        def status(url, headers=None):
+            try:
+                with urllib.request.urlopen(urllib.request.Request(url, headers=headers or {}), timeout=5) as r:
+                    return r.status, r.read()
+            except urllib.error.HTTPError as e:
+                return e.code, b""
+            except urllib.error.URLError:
+                return None, b""
+
+        code, page = status(there + "/?key=" + key)
+        if code is not None:  # a firewall may keep even this machine from its own network address
+            assert code == 200 and token.encode() in page, "the phone link opens the board"
+            assert status(there + "/")[0] == 403 and status(there + "/?key=wrong")[0] == 403, "no key, no board"
+            assert status(there + "/api/state", {"X-Token": token})[0] == 200, "the page it gave can drive it"
+            assert status(there + "/api/state", {"X-Token": "wrong"})[0] == 403
+        assert status(f"http://127.0.0.1:{httpd.server_port}/")[0] == 200, "this machine needs no key"
+        httpd.shutdown()
+    httpd, _ = gui.make_server(0)
+    assert httpd.server_address[0] == "127.0.0.1", "without phone mode nothing listens on the network"
+    httpd.server_close()
+
 # the two lines of watcher.py that the board reads must stay in the form it expects
 stat = gui.STAT.match("[xqc] 1805s | Msgs: 130 | Median: 128.5 | Threshold: 325 | recording")
 assert stat and stat.groups() == ("1805", "130", None, "128.5", "325", "recording"), stat
