@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Make a short intro and outro for your channel, drawn by ffmpeg: brand/intro.mp4 and brand/outro.mp4."""
+"""Draw a short intro and outro, a profile picture and a banner for your channel with ffmpeg, into brand/."""
 import argparse
 import subprocess
 import tempfile
@@ -67,7 +67,23 @@ def main():
             text(tmp, "credit2", "The streamer is linked in the description.", 42, MUTED, 1176, 0.4),
         ])
         render(folder / "outro.mp4", 2.0, outro, "anullsrc=r=48000:cl=stereo")
-    print(f"made {folder / 'intro.mp4'} and {folder / 'outro.mp4'}")
+        # profile picture, 800 x 800: the chat meter alone, kept inside the circle YouTube crops it to
+        meter = [f"drawbox=x={164 + i * 100}:y={590 - height}:w=72:h={height}:color={SPIKE if i == 4 else MUTED}:t=fill"
+                 for i, height in enumerate([90, 150, 110, 190, 380])]
+        picture(folder / "avatar.png", 800, 800, ",".join(meter))
+        # banner, 2560 x 1440: everything inside the 1546 x 423 middle that shows on every screen
+        meter = [f"drawbox=x={560 + i * 40}:y={830 - height}:w=28:h={height}:color={SPIKE if i == 4 else MUTED}:t=fill"
+                 for i, height in enumerate([40, 66, 48, 84, 170])]
+        picture(folder / "banner.png", 2560, 1440, ",".join(meter + [
+            text(tmp, "bname", args.name.upper(), 120, TEXT, 640, -1).replace("x=(w-text_w)/2", "x=800"),
+            text(tmp, "bline", "Live stream moments, cut the second chat exploded", 44, MUTED, 790, -1)
+            .replace("x=(w-text_w)/2", "x=804")]))
+    print(f"made intro.mp4, outro.mp4, avatar.png and banner.png in {folder}")
+
+
+def picture(out, width, height, video):
+    subprocess.run(["ffmpeg", "-nostdin", "-y", "-loglevel", "error", "-f", "lavfi", "-i", f"color=c={BG}:s={width}x{height}",
+                    "-vf", video, "-frames:v", "1", "-map_metadata", "-1", str(out)], check=True)
 
 
 if __name__ == "__main__":
