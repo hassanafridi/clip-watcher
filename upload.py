@@ -9,7 +9,11 @@ HERE = Path(__file__).parent
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 UPLOAD_URL = "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status"
 THUMB_URL = "https://www.googleapis.com/upload/youtube/v3/thumbnails/set"
-HASHTAGS = "#{channel} #{site} #clips"
+HASHTAGS = "#{channel} #{game} #{site} #clips"
+# the short names people search for; any other game becomes its name run together, e.g. #EldenRing
+GAME_TAGS = {"grand theft auto vi": "GTA6", "grand theft auto v": "GTA5", "counter-strike": "CS2", "counter-strike 2": "CS2",
+             "league of legends": "LeagueOfLegends", "call of duty: warzone": "Warzone", "just chatting": "JustChatting",
+             "ea sports fc 25": "EAFC25", "ea sports fc 26": "EAFC26", "rocket league": "RocketLeague"}
 TITLE = "{text} | {channel}"
 DESCRIPTION = "{text}"
 
@@ -34,14 +38,21 @@ def describe(text, channel, title=TITLE, description=DESCRIPTION):
     )
 
 
-def hashtags(template, source):
-    """The hashtags of an upload: the template filled in ({channel}, {site}), each once, #Shorts last.
+def game_tag(game):
+    """A game's name as a hashtag word: its usual short name, or the name run together."""
+    game = (game or "").strip()
+    return GAME_TAGS.get(game.lower()) or "".join(w[:1].upper() + w[1:] for w in re.sub(r"[^\w ]", " ", game).split())
+
+
+def hashtags(template, source, game=""):
+    """The hashtags of an upload: the template filled in ({channel}, {game}, {site}), each once, #Shorts last.
 
     YouTube ignores every hashtag of a video that has more than 60, and counts piles of them as spam, so at most
     15 are kept.
     """
     site, _, channel = source.partition("/")
-    words = (template or "").format(channel=re.sub(r"\W", "", channel), site=site.split(".")[0]).split()
+    words = (template or "").format(channel=re.sub(r"\W", "", channel), site=site.split(".")[0],
+                                     game=game_tag(game)).split()
     tags = []
     for word in words + ["#Shorts"]:
         tag = "#" + re.sub(r"\W", "", word.lstrip("#"))
@@ -67,7 +78,7 @@ def youtube():
 
 
 def publish(clip, source, privacy="private", title=TITLE, description=DESCRIPTION, say=print, tags=HASHTAGS,
-            thumbnail=None):
+            thumbnail=None, game=""):
     """Upload clip (an .mp4 with an .srt beside it) and return the YouTube video id.
 
     thumbnail: an image to set as the video's thumbnail afterwards; YouTube may not use it on a Short.
@@ -77,7 +88,7 @@ def publish(clip, source, privacy="private", title=TITLE, description=DESCRIPTIO
     body = {
         "snippet": {
             "title": title,
-            "description": f"{description}\n\nClipped from https://{source}\n{hashtags(tags, source)}"[:4900],
+            "description": f"{description}\n\nClipped from https://{source}\n{hashtags(tags, source, game)}"[:4900],
             "categoryId": "20",
         },
         "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False},

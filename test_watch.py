@@ -477,6 +477,8 @@ assert clips == [(watcher.KICK_LAG, 50)], "a Kick clip is told how late its chat
 
 # hashtags: filled in, cleaned, each once, #Shorts last, never a pile
 assert upload.hashtags(upload.HASHTAGS, "twitch.tv/ishowspeed") == "#ishowspeed #twitch #clips #Shorts"
+assert upload.hashtags(upload.HASHTAGS, "twitch.tv/ishowspeed", "Grand Theft Auto VI") == "#ishowspeed #GTA6 #twitch #clips #Shorts"
+assert upload.game_tag("Elden Ring: Nightreign") == "EldenRingNightreign" and upload.game_tag("") == ""
 assert upload.hashtags("#chatwentoff #{channel} #GTA6 #gta-6", "kick.com/xqc") == "#chatwentoff #xqc #GTA6 #Shorts"
 assert upload.hashtags(" ".join(f"#t{i}" for i in range(40)), "twitch.tv/x").count("#") == 15
 
@@ -505,6 +507,8 @@ def run_clip(answer, lag=0, fail=None, probe="1.5\n1.5,34.5\n", speech=None, **o
         ran.append(command)
         if fail and fail in command:
             raise RuntimeError("ffmpeg failed: boom")
+        if command[1:4] == ["-m", "streamlink", "--json"]:
+            return 'warning first\n{"metadata": {"category": "Grand Theft Auto VI", "author": "x"}}\n'
         if command[0] == "ffprobe" and "stream=codec_type,r_frame_rate:format=duration" in command:
             return "video,60/1\naudio,0/0\n34.5\n"
         if command[0] == "ffprobe":
@@ -591,6 +595,7 @@ with tempfile.TemporaryDirectory() as folder:
     assert "it-19.850" in graph, "the punch-in lands on the spike, 20 s into the clip"
     assert "[1:v]" in graph and "[2:v]" in graph and "[3:v]" not in graph, "intro is input 1, outro input 2"
     assert (Path(folder) / "clips" / "chan_20260101_000000.srt").exists() and said[-1].endswith(".srt")
+    assert json.loads((Path(folder) / "clips" / "chan_20260101_000000.json").read_text())["game"] == "Grand Theft Auto VI"
     assert not list(Path(folder).glob("chan_20260101_000000.*")), "no working files are left"
     # the real chat of the moment goes into a box, and a teaser of the spike plays before the intro
     watcher.CHAT_LOG["twitch.tv/chan"] = deque([(1_000_000 - 40, "early", "too early"), (1_000_000 - 5, "fan", "LETS GO"),
@@ -1237,7 +1242,8 @@ with tempfile.TemporaryDirectory() as folder:
         while board.reviewed.get("dinah-kick_20261120_130000.mp4", {}).get("state") == "editing":
             assert time.time() < deadline
             time.sleep(0.02)
-        graph = remade[-1][remade[-1].index("-filter_complex") + 1]
+        remake = [c for c in remade if "-filter_complex" in c][-1]
+        graph = remake[remake.index("-filter_complex") + 1]
         assert "trim=start=13.700:duration=3.000" in graph and "trim=start=2.500," in graph, graph
         assert (gui.CLIPS / "dinah-kick_20261120_130000.mp4").read_bytes() == b"remade"
         assert json.loads((gui.CLIPS / "dinah-kick_20261120_130000.json").read_text())["teaser"] == 3.0
@@ -1246,8 +1252,17 @@ with tempfile.TemporaryDirectory() as folder:
         while board.reviewed.get("dinah-kick_20261120_130000.mp4", {}).get("state") == "editing":
             assert time.time() < deadline
             time.sleep(0.02)
-        graph = remade[-1][remade[-1].index("-filter_complex") + 1]
+        remake = [c for c in remade if "-filter_complex" in c][-1]
+        graph = remake[remake.index("-filter_complex") + 1]
         assert "concat" not in graph and "trim=start=3.000," in graph, "the 3 s teaser is taken out again"
+        # the default thumbnail followed: the frame at the spike now that there is no teaser, words from the speech
+        grab = [c for c in remade if "-frames:v" in c][-1]
+        assert grab[grab.index("-ss") + 1] == "21.200", grab
+        # a thumbnail made by hand is kept when the teaser changes
+        assert ask("/api/review/thumbnail", {"name": "dinah-kick_20261120_130000.mp4", "at": 5, "text": "mine"})[0] == 200
+        before = len(remade)
+        board.first_thumbnail("dinah-kick_20261120_130000.mp4")
+        assert len(remade) == before, "the hand-made thumbnail stays"
     finally:
         watcher.run = real_run
     assert ask("/api/review/delete", {"name": "dinah-kick_20261120_130000.mp4"})[0] == 200

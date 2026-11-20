@@ -739,6 +739,15 @@ def streams(path):
     return set(kinds), rate if re.fullmatch(r"\d+/[1-9]\d*", rate) and not rate.startswith("0/") else "30/1", seconds
 
 
+def stream_category(source):
+    """What the stream is playing right now, e.g. Grand Theft Auto VI, as the site reports it; empty when unknown."""
+    try:
+        said = run(sys.executable, "-m", "streamlink", "--json", f"https://{source}")
+        return str((json.loads(said[said.index("{"):said.rindex("}") + 1]).get("metadata") or {}).get("category") or "")
+    except (RuntimeError, ValueError, AttributeError):
+        return ""
+
+
 def teaser_span(seconds, spike, length):
     """Where the teaser is cut from, in clip time: from just before chat spiked, inside the clip."""
     a = max(0.0, min(spike - 0.5, length - seconds))
@@ -935,7 +944,8 @@ def make_clip(recorder, out, source, args, lag, noticed):
             shutil.move(part, out)
             # how the clip is put together, so the board can cut a different teaser from it later
             a, b = teaser_span(o.teaser, spike, length) if o.teaser > 0 else (0.0, 0.0)
-            out.with_suffix(".json").write_text(json.dumps({
+            game = stream_category(source)
+            out.with_suffix(".json").write_text(json.dumps({"game": game,
                 "teaser": round(b - a, 3), "teaser_from": round(a, 3), "spike": round(spike, 3), "main": round(length, 3),
                 "intro": round(next((x[3] for x in extras if x[1] == "intro"), 0.0), 3)}), encoding="utf-8")
             if o.captions != "off" and said:
@@ -945,7 +955,7 @@ def make_clip(recorder, out, source, args, lag, noticed):
                 log(tag, f"saved {out}")
             if args.upload:
                 upload.publish(out, source, args.privacy, args.title, args.description, lambda text: log(tag, text),
-                               args.hashtags)
+                               args.hashtags, game=game)
         finally:
             slot.close()
     except Exception as e:  # one bad clip must not take the channel down
@@ -1166,7 +1176,8 @@ def build_parser():
     yt.add_argument("--title", default=upload.TITLE,
                     help="title of the upload; {text} is what was said, {channel} the channel name")
     yt.add_argument("--hashtags", default=upload.HASHTAGS,
-                    help="hashtags added to every upload; {channel} is the streamer, {site} twitch or kick; "
+                    help="hashtags added to every upload; {channel} is the streamer, {game} what they play, "
+                         "{site} twitch or kick; "
                          "#Shorts is always added")
     yt.add_argument("--description", default=upload.DESCRIPTION,
                     help="description of the upload; same placeholders as the title")

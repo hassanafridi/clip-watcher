@@ -119,8 +119,8 @@ DETAILS = {
                  "public is everyone.",
     "--title": "Title given to each upload. {text} becomes the first words spoken in the clip "
                "and {channel} the streamer's name.",
-    "--hashtags": "Hashtags put at the end of every description. {channel} becomes the streamer's name, {site} twitch or "
-                  "kick; #Shorts is always added. Keep them few and true to the clip: YouTube ignores a video's hashtags "
+    "--hashtags": "Hashtags put at the end of every description. {channel} becomes the streamer's name, {game} what they "
+                  "were playing when the clip was cut (GTA VI becomes #GTA6), {site} twitch or kick; #Shorts is always added. Keep them few and true to the clip: YouTube ignores a video's hashtags "
                   "when it has more than 60, and misleading ones can get it removed.",
     "--description": "Description given to each upload, with the same {text} and {channel} placeholders. "
                      "A credit link to the stream is added for you.",
@@ -395,6 +395,7 @@ class Board:
                     clip = CLIP.search(line)
                     if clip:
                         stream.clips, stream.last = stream.clips + 1, Path(clip[1].replace("\\", "/")).name
+                        threading.Thread(target=self.first_thumbnail, args=(stream.last,), daemon=True).start()
                     self.say(line)
         code = proc.wait()
         with self.lock:
@@ -552,7 +553,8 @@ class Board:
                 layout_of = None  # made before clips said how they are put together: no teaser choice
             out.append({"name": clip.name, "channel": channel, "source": source, "made": int(clip.stat().st_mtime),
                         "parts": layout_of, "thumb": clip.with_suffix(".jpg").is_file(),
-                        "tags": upload.hashtags(self.setting("--hashtags", upload.HASHTAGS), source),
+                        "tags": upload.hashtags(self.setting("--hashtags", upload.HASHTAGS), source,
+                                                (layout_of or {}).get("game", "")),
                         "mb": round(clip.stat().st_size / 1e6, 1), "title": title, "description": description,
                         **reviewed.get(clip.name, {"state": "uploaded" if clip.parent.name == "uploaded" else "waiting"})})
         return {"clips": out, "privacy": self.setting("--privacy", "private")}
@@ -608,8 +610,27 @@ class Board:
 
         threading.Thread(target=send, daemon=True).start()
 
-    def thumbnail(self, name, at, text):
-        """Make the clip's thumbnail: its frame at `at` seconds, with big words on it, as <clip>.jpg."""
+    def first_thumbnail(self, name, keep_own=True):
+        """The default thumbnail: the teaser's first frame (or the spike without a teaser), with the first words said.
+
+        keep_own: leave a thumbnail made by hand as it is.
+        """
+        clip = clip_path(name)
+        try:
+            parts = json.loads(clip.with_suffix(".json").read_text(encoding="utf-8"))
+        except (AttributeError, OSError, ValueError):
+            return  # made before clips said how they are put together
+        if keep_own and parts.get("own_thumbnail"):
+            return
+        at = 0.05 if parts.get("teaser") else parts.get("intro", 0) + parts.get("spike", 0)
+        said = " ".join(upload.transcript(clip.with_suffix(".srt")).split()[:5])
+        self.thumbnail(name, at, said, own=False)
+
+    def thumbnail(self, name, at, text, own=True):
+        """Make the clip's thumbnail: its frame at `at` seconds, with big words on it, as <clip>.jpg.
+
+        own: made by hand, so a new teaser does not replace it.
+        """
         clip = clip_path(name)
         if not clip:
             return "That clip is not there any more"
@@ -654,6 +675,12 @@ class Board:
         finally:
             for card in cards:
                 card.unlink(missing_ok=True)
+        try:
+            parts = json.loads(clip.with_suffix(".json").read_text(encoding="utf-8"))
+            parts["own_thumbnail"] = own
+            clip.with_suffix(".json").write_text(json.dumps(parts), encoding="utf-8")
+        except (OSError, ValueError):
+            pass
 
     def clear(self):
         """Delete every clip still waiting for review; uploaded ones in clips/uploaded/ stay."""
@@ -707,6 +734,7 @@ class Board:
                 os.replace(fresh, clip)
                 parts.update(teaser=round(seconds, 3), teaser_from=round(start, 3))
                 clip.with_suffix(".json").write_text(json.dumps(parts), encoding="utf-8")
+                self.first_thumbnail(name)  # the default thumbnail follows the new teaser
                 note = f"[review] new teaser for {name}" if seconds else f"[review] teaser taken out of {name}"
             except (RuntimeError, OSError) as e:
                 fresh.unlink(missing_ok=True)
