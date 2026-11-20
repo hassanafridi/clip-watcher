@@ -15,11 +15,14 @@ from pathlib import Path
 from urllib.parse import parse_qs
 
 import live
+import upload
 import watcher
 
 HERE = Path(__file__).parent
 PAGE = HERE / "gui.html"
 SAVED = HERE / "streams.json"
+CLIPS = HERE / "clips"  # where watcher.py saves clips; clips.json there remembers what was reviewed
+CLIP_NAME = re.compile(r"[A-Za-z0-9_-]{1,80}\.mp4")
 PORT = 8791  # gui.html looks for the helper here when it is opened straight from disk
 KEEP = 2000  # log lines held for the page
 HISTORY = 60  # chat counts kept per stream for its chart
@@ -102,8 +105,9 @@ DETAILS = {
                   "Leave empty to have it detected for each clip.",
     "--jobs": "How many clips are encoded and transcribed at the same time, counted over all streams. "
               "1 keeps the machine responsive. Raise it when clips pile up and the processor has room.",
-    "--upload": "Sends every finished clip to your YouTube channel as a Short. "
-                "Needs the one-time YouTube setup described in the README.",
+    "--upload": "Used when clip-watcher runs in a terminal: sends every finished clip to your YouTube channel "
+                "without review. The board never does that: there every clip waits under Clips to review until "
+                "you watch it and press Upload. Needs the one-time YouTube setup described in the README.",
     "--privacy": "Who can see uploaded clips. Private is only you, unlisted is anyone with the link, "
                  "public is everyone.",
     "--title": "Title given to each upload. {text} becomes the first words spoken in the clip "
@@ -201,6 +205,13 @@ def shape_values(cam, ratio, game=None, share=None):
     return cam, ratio, game, share
 
 
+def clip_source(name):
+    """The channel a clip came from, and its stream link, read from the clip's file name."""
+    m = re.match(r"(.+?)(-kick)?_\d{8}_\d{6}\.mp4$", name)
+    channel = m[1] if m else name.rsplit(".", 1)[0]
+    return channel, f"{'kick.com' if m and m[2] else 'twitch.tv'}/{channel}"
+
+
 class Stream:
     """One row of the board: a channel, its own spike settings, and the watcher.py process following it."""
 
@@ -238,6 +249,11 @@ class Board:
         self.lock = threading.Lock()
         self.streams, self.shared, self.lines, self.first = {}, [], [], 0
         self.topped = {}  # site -> (when asked, its most watched categories)
+        try:
+            self.reviewed = json.loads((CLIPS / "clips.json").read_text(encoding="utf-8"))
+            assert isinstance(self.reviewed, dict)
+        except (OSError, ValueError, AssertionError):
+            self.reviewed = {}  # clip name -> {"state": "uploading" / "uploaded" / "failed", ...}
         try:
             saved = json.loads(SAVED.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -342,7 +358,7 @@ class Board:
             stream.proc = subprocess.Popen(
                 [sys.executable, "-u", str(HERE / "watcher.py"), "--stdin-control", link, *own,
                  *(a for a in self.shared if a.partition("=")[0] not in PER_STREAM
-                   and not (stream.ratio and a.startswith("--ratio=")))],
+                   and not (stream.ratio and a.startswith("--ratio=")) and a != "--upload")],  # uploads: reviewed
                 cwd=HERE, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, errors="replace", **watcher.APART,
             )
@@ -495,6 +511,85 @@ class Board:
                 stream.tell(f"min={minimum}")
                 stream.tell(f"factor={factor:g}")
 
+    def setting(self, flag, default):
+        return next((a.partition("=")[2] for a in self.shared if a.startswith(flag + "=")), default)
+
+    def clips(self):
+        """Clips on disk with what reviewing needs: the suggested title and description, and their state."""
+        out = []
+        with self.lock:
+            reviewed = dict(self.reviewed)
+        files = sorted(CLIPS.glob("*.mp4"), key=lambda f: f.stat().st_mtime, reverse=True) if CLIPS.is_dir() else []
+        for clip in files[:60]:  # ponytail: newest 60 only; older clips stay on disk untouched
+            if not CLIP_NAME.fullmatch(clip.name):
+                continue
+            channel, source = clip_source(clip.name)
+            try:
+                title, description = upload.describe(upload.transcript(clip.with_suffix(".srt")), channel,
+                                                     self.setting("--title", upload.TITLE),
+                                                     self.setting("--description", upload.DESCRIPTION))
+            except (KeyError, IndexError, ValueError):
+                title, description = upload.describe(upload.transcript(clip.with_suffix(".srt")), channel)
+            out.append({"name": clip.name, "channel": channel, "source": source, "made": int(clip.stat().st_mtime),
+                        "mb": round(clip.stat().st_size / 1e6, 1), "title": title, "description": description,
+                        **reviewed.get(clip.name, {"state": "waiting"})})
+        return {"clips": out, "privacy": self.setting("--privacy", "private")}
+
+    def keep_reviewed(self):
+        fresh = CLIPS / "clips.json.tmp"
+        try:
+            fresh.write_text(json.dumps(self.reviewed, indent=1), encoding="utf-8")
+            os.replace(fresh, CLIPS / "clips.json")
+        except OSError:
+            pass
+
+    def publish(self, name, title, description, privacy):
+        """Upload one reviewed clip in the background; the clip list shows how it went."""
+        clip = CLIPS / str(name)
+        if not CLIP_NAME.fullmatch(str(name)) or not clip.is_file():
+            return "That clip is not there any more"
+        if privacy not in ("private", "unlisted", "public"):
+            return "Pick who can see it"
+        title, description = str(title or "").strip(), str(description or "").strip()
+        if not title or len(title) > 100:
+            return "The title must have 1 to 100 characters"
+        with self.lock:
+            if self.reviewed.get(name, {}).get("state") in ("uploading", "uploaded"):
+                return "That clip is already uploading or uploaded"
+            self.reviewed[name] = {"state": "uploading", "privacy": privacy}
+            self.keep_reviewed()
+
+        def send():
+            literal = {ord("{"): "{{", ord("}"): "}}"}  # the text as typed, not a template
+            try:
+                video = upload.publish(clip, clip_source(name)[1], privacy, title.translate(literal),
+                                       description.translate(literal), say=lambda text: None)
+                result = {"state": "uploaded", "privacy": privacy, "id": video}
+                note = f"[review] uploaded {name} ({privacy}): https://youtube.com/shorts/{video}"
+            except (Exception, SystemExit) as e:  # a refused upload must reach the page, not end the server
+                result = {"state": "failed", "error": str(e)[:300]}
+                note = f"[review] upload of {name} failed: {e}"
+            with self.lock:
+                self.reviewed[name] = result
+                self.keep_reviewed()
+                self.say(note)
+
+        threading.Thread(target=send, daemon=True).start()
+
+    def discard(self, name):
+        """Delete a clip that should never go out, with its subtitles."""
+        clip = CLIPS / str(name)
+        if not CLIP_NAME.fullmatch(str(name)) or not clip.is_file():
+            return "That clip is not there any more"
+        with self.lock:
+            if self.reviewed.get(name, {}).get("state") == "uploading":
+                return "That clip is uploading right now"
+            for path in (clip, clip.with_suffix(".srt")):
+                path.unlink(missing_ok=True)
+            self.reviewed.pop(name, None)
+            self.keep_reviewed()
+            self.say(f"[review] deleted {name}")
+
     def state(self, since):
         with self.lock:
             return {
@@ -555,6 +650,14 @@ def make_server(port=0):
             elif path == "/api/state":
                 since = parse_qs(query).get("since", ["0"])[0]
                 self.reply(200, board.state(int(since) if since.isdigit() else 0))
+            elif path == "/api/clips":
+                self.reply(200, board.clips())
+            elif path == "/api/clip":
+                name = parse_qs(query).get("name", [""])[0]
+                clip = CLIPS / name
+                if not CLIP_NAME.fullmatch(name) or not clip.is_file():
+                    return self.reply(404, {"error": "That clip is not there any more"})
+                self.reply(200, clip.read_bytes(), "video/mp4")
             elif path == "/api/frame":
                 picture, error = board.frame(parse_qs(query).get("id", [""])[0])
                 self.reply(200, picture, "image/jpeg") if picture else self.reply(409, {"error": error})
@@ -622,6 +725,10 @@ def make_server(port=0):
                 rows = [{**c, "link": f"{'kick.com' if site == 'kick' else 'twitch.tv'}/{c['channel']}",
                          "id": f"{site}-{c['channel'].lower()}"} for c in found if watcher.parse_channel(c["channel"])]
                 return self.reply(200, {"category": name, "site": site, "streams": rows})
+            elif self.path == "/api/review/upload":
+                error = board.publish(body.get("name"), body.get("title"), body.get("description"), body.get("privacy"))
+            elif self.path == "/api/review/delete":
+                error = board.discard(body.get("name"))
             elif self.path == "/api/open-clips":
                 folder = HERE / "clips"
                 folder.mkdir(exist_ok=True)

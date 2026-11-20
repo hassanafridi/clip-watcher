@@ -140,6 +140,22 @@ main { max-width: 1440px; margin: 0 auto; padding: 32px; display: grid; gap: 40p
 .result .title { color: var(--text-2); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .result .placed { color: var(--muted); font-size: 13px; }
 .result button { height: 32px; padding: 0 12px; }
+.clip { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 16px; padding: 16px 0; border-top: 1px solid var(--line); }
+.clip .look { width: 120px; aspect-ratio: 9 / 16; border-radius: 8px; background: var(--raised); display: flex;
+  align-items: center; justify-content: center; overflow: hidden; }
+.clip .look video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+.clip .look button { height: 32px; padding: 0 12px; }
+.clip .facts { color: var(--text-2); font-size: 13px; margin-bottom: 8px; }
+.clip .facts strong { color: var(--text); font-weight: 500; font-size: 14px; }
+.clip label { display: block; color: var(--muted); font-size: 12px; line-height: 16px; margin: 8px 0 4px; }
+.clip textarea { width: 100%; min-height: 56px; padding: 8px 12px; background: var(--card); border: 1px solid var(--line-strong);
+  border-radius: 8px; font: inherit; color: inherit; resize: vertical; }
+.clip .acts { justify-content: flex-start; flex-wrap: wrap; margin-top: 12px; align-items: center; }
+.clip .acts select { width: auto; height: 32px; }
+.clip .acts button { height: 32px; padding: 0 12px; }
+.clip .state { font-size: 13px; color: var(--text-2); }
+.clip .state.bad { color: var(--tally); }
+.clip.done { opacity: 0.6; }
 
 #log {
   margin: 0; height: 220px; overflow: auto; padding: 12px; background: var(--card);
@@ -275,6 +291,17 @@ aside h2 { margin-bottom: 16px; }
     </div>
     <div class="streams" id="streams"></div>
     <p class="empty" id="empty">No streams yet. Add a channel in the bar above. Every stream gets its own row with its own minimum, its own start and stop, and its chat counted live.</p>
+  </section>
+  <section>
+    <div class="head">
+      <h2>Clips to review</h2>
+      <div class="tools"><button id="review-refresh">Refresh</button></div>
+    </div>
+    <p class="help">Nothing is uploaded until you watch the clip and press Upload. Delete anything that shows nudity,
+      hate or other content YouTube removes. By uploading you confirm the clip follows YouTube's Terms of Service
+      and Community Guidelines.</p>
+    <div id="review"></div>
+    <p class="empty" id="review-empty">No clips yet. Finished clips show up here.</p>
   </section>
   <section>
     <div class="head"><h2>Log</h2></div>
@@ -427,6 +454,80 @@ function preview() {
       : "One crop from the middle of the picture, or centred on the streamer when they fill it."
   );
 }
+
+// ---- clips to review: nothing goes to YouTube until a person has watched it and pressed Upload ----
+
+const reviewing = new Map();  // clip name -> its element, kept so a preview or a typed title survives a refresh
+async function loadClips() {
+  let data;
+  try { data = await api("/api/clips"); } catch (error) { return; }
+  const list = $("review"), names = new Set(data.clips.map(c => c.name));
+  for (const [name, item] of reviewing) if (!names.has(name)) { item.root.remove(); reviewing.delete(name); }
+  for (const c of data.clips) {
+    const item = reviewing.get(c.name) || clipItem(c, data.privacy);
+    paintClip(item, c);
+    list.append(item.root);
+  }
+  $("review-empty").hidden = data.clips.length > 0;
+}
+function clipItem(c, privacy) {
+  const id = "c-" + c.name.replace(/\W/g, "-");
+  const item = {
+    look: el("div", {className: "look"}, el("button", {onclick: () => watch(item, c.name)}, "Watch")),
+    title: el("input", {type: "text", id: id + "-t", maxLength: 100, value: c.title}),
+    description: el("textarea", {id: id + "-d", value: c.description}),
+    privacy: el("select", {ariaLabel: "Who can see it"},
+                ...["private", "unlisted", "public"].map(v => el("option", {value: v}, v))),
+    send: el("button", {className: "go"}, "Upload"), drop: el("button", {}, "Delete"),
+    state: el("span", {className: "state", ariaLive: "polite"}),
+  };
+  item.privacy.value = privacy;
+  const when = new Date(c.made * 1000).toLocaleString();
+  item.root = el("div", {className: "clip"}, item.look, el("div", {},
+    el("div", {className: "facts"}, el("strong", {}, c.channel), ` - ${when} - ${c.mb} MB`),
+    el("label", {htmlFor: item.title.id}, "Title"), item.title,
+    el("label", {htmlFor: item.description.id}, "Description (the stream link and #Shorts are added)"), item.description,
+    el("div", {className: "acts"}, item.privacy, item.send, item.drop, item.state)));
+  item.send.onclick = async () => {
+    item.send.disabled = true;
+    try {
+      await api("/api/review/upload", {name: c.name, title: item.title.value, description: item.description.value,
+                                        privacy: item.privacy.value});
+    } catch (error) { item.state.textContent = error.message; item.state.className = "state bad"; }
+    loadClips();
+  };
+  item.drop.onclick = async () => {
+    if (!confirm("Delete " + c.name + " for good?")) return;
+    try { await api("/api/review/delete", {name: c.name}); } catch (error) { item.state.textContent = error.message; }
+    loadClips();
+  };
+  reviewing.set(c.name, item);
+  return item;
+}
+function paintClip(item, c) {
+  const busy = c.state === "uploading", done = c.state === "uploaded";
+  item.root.classList.toggle("done", done);
+  for (const control of [item.title, item.description, item.privacy, item.send]) control.disabled = busy || done;
+  item.drop.disabled = busy;
+  item.state.className = "state" + (c.state === "failed" ? " bad" : "");
+  item.state.replaceChildren(
+    busy ? "Uploading"
+    : done ? el("a", {href: "https://youtube.com/shorts/" + c.id, target: "_blank", rel: "noopener"}, "Uploaded (" + c.privacy + ")")
+    : c.state === "failed" ? "Upload failed: " + c.error
+    : "Waiting for review");
+}
+async function watch(item, name) {
+  item.look.replaceChildren("Loading");
+  try {
+    const response = await fetch("/api/clip?name=" + encodeURIComponent(name), {headers: {"X-Token": token}});
+    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || response.statusText);
+    const video = el("video", {controls: true, autoplay: true, src: URL.createObjectURL(await response.blob())});
+    item.look.replaceChildren(video);
+  } catch (error) {
+    item.look.replaceChildren(error.message);
+  }
+}
+$("review-refresh").onclick = loadClips;
 
 // ---- the cam editor: where the streamer's cam is, and the clip's shape, for one stream ----
 
@@ -898,6 +999,8 @@ if (location.protocol === "file:") {
     apply(shared);
     poll();
     loadCategories();
+    loadClips();
+    setInterval(loadClips, 15000);
   }).catch(error => offline("This page lost its connection", error.message));
 }
 </script>

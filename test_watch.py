@@ -18,6 +18,7 @@ from urllib.parse import parse_qs, urlparse
 
 import gui
 import live
+import upload
 import watcher
 from upload import describe, transcript
 from watcher import Recorder, is_spike, layout, lock_file, parse_channel, parse_target, ratio, steady_face
@@ -1119,6 +1120,86 @@ for argv, message in ((["--category", "chess"], "nobody is live in Chess right n
         sys.argv, sys.stderr = real_argv, real_stderr
     assert message in said_last, said_last
 live.live = real_live
+
+# --- clips to review: nothing goes to YouTube until a person presses Upload ---
+with tempfile.TemporaryDirectory() as folder:
+    gui.SAVED, gui.CLIPS = Path(folder) / "streams.json", Path(folder) / "clips"
+    gui.CLIPS.mkdir()
+    (gui.CLIPS / "xqc_20261120_120000.mp4").write_bytes(b"video one")
+    (gui.CLIPS / "xqc_20261120_120000.srt").write_text("1\n00:00:00,000 --> 00:00:01,000\nwhat a play\n", encoding="utf-8")
+    (gui.CLIPS / "dinah-kick_20261120_130000.mp4").write_bytes(b"video two")
+    httpd, token = gui.make_server()
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    board = httpd.board
+
+    def ask(path, body=None):
+        data = None if body is None else json.dumps(body).encode()
+        request = urllib.request.Request(f"http://127.0.0.1:{httpd.server_port}{path}", data=data, headers={"X-Token": token})
+        try:
+            with urllib.request.urlopen(request, timeout=5) as r:
+                return r.status, json.loads(r.read()) if "json" in r.headers["Content-Type"] else r.read()
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read())
+
+    listed = ask("/api/clips")[1]
+    clips = {c["name"]: c for c in listed["clips"]}
+    assert listed["privacy"] == "private" and set(clips) == {"xqc_20261120_120000.mp4", "dinah-kick_20261120_130000.mp4"}
+    assert clips["xqc_20261120_120000.mp4"]["title"] == "what a play | xqc" and clips["xqc_20261120_120000.mp4"]["state"] == "waiting"
+    assert clips["dinah-kick_20261120_130000.mp4"]["source"] == "kick.com/dinah"
+    assert ask("/api/clip?name=xqc_20261120_120000.mp4") == (200, b"video one")
+    for bad in ("../streams.json", "..%5Cgui.py", "nothere_20261120_120000.mp4"):
+        assert ask("/api/clip?name=" + bad)[0] == 404, bad
+
+    sent, real_publish = [], upload.publish
+
+    def fake_publish(clip, source, privacy, title, description, say=print):
+        sent.append((Path(clip).name, source, privacy, title, description))
+        return "abc123"
+
+    upload.publish = fake_publish
+    try:
+        for bad in ({"privacy": "everyone"}, {"title": ""}, {"title": "x" * 101}, {"name": "../gui.py"}):
+            body = {"name": "xqc_20261120_120000.mp4", "title": "t", "description": "", "privacy": "unlisted", **bad}
+            assert ask("/api/review/upload", body)[0] == 400, bad
+        assert sent == [], "nothing went out for a request that was refused"
+        assert ask("/api/review/upload", {"name": "xqc_20261120_120000.mp4", "title": "{x} my title",
+                                          "description": "words", "privacy": "unlisted"})[0] == 200
+        deadline = time.time() + 3
+        while board.reviewed.get("xqc_20261120_120000.mp4", {}).get("state") != "uploaded":
+            assert time.time() < deadline
+            time.sleep(0.02)
+        assert sent == [("xqc_20261120_120000.mp4", "twitch.tv/xqc", "unlisted", "{{x}} my title", "words")], sent
+        assert ask("/api/review/upload", {"name": "xqc_20261120_120000.mp4", "title": "t", "privacy": "private"})[0] == 400
+        assert gui.Board().reviewed["xqc_20261120_120000.mp4"] == {"state": "uploaded", "privacy": "unlisted", "id": "abc123"}
+
+        def refuse(*args, **kw):
+            raise RuntimeError("YouTube refused the upload: 403 quotaExceeded")
+
+        upload.publish = refuse
+        assert ask("/api/review/upload", {"name": "dinah-kick_20261120_130000.mp4", "title": "t", "privacy": "private"})[0] == 200
+        deadline = time.time() + 3
+        while board.reviewed.get("dinah-kick_20261120_130000.mp4", {}).get("state") != "failed":
+            assert time.time() < deadline
+            time.sleep(0.02)
+        assert "quotaExceeded" in ask("/api/clips")[1]["clips"][0]["error"] + ask("/api/clips")[1]["clips"][1].get("error", "")
+    finally:
+        upload.publish = real_publish
+    assert ask("/api/review/delete", {"name": "xqc_20261120_120000.mp4"})[0] == 200
+    assert not (gui.CLIPS / "xqc_20261120_120000.mp4").exists() and not (gui.CLIPS / "xqc_20261120_120000.srt").exists()
+    assert ask("/api/review/delete", {"name": "xqc_20261120_120000.mp4"})[0] == 400
+    assert ask("/api/review/delete", {"name": "../streams.json"})[0] == 400
+
+    # a stream started from the board never uploads on its own, even with the upload setting on
+    board.add("xqc", 15, 2.5)
+    board.shared = ["--upload", "--privacy=public"]
+    real_popen, subprocess.Popen = subprocess.Popen, FakeChild
+    try:
+        board.start("twitch-xqc", None)
+    finally:
+        subprocess.Popen = real_popen
+    assert "--upload" not in FakeChild.made[-1].command and "--privacy=public" in FakeChild.made[-1].command
+    FakeChild.made[-1].gone.set()
+    httpd.shutdown()
 
 # the two lines of watcher.py that the board reads must stay in the form it expects
 stat = gui.STAT.match("[xqc] 1805s | Msgs: 130 | Median: 128.5 | Threshold: 325 | recording")
