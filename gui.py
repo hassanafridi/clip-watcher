@@ -593,9 +593,10 @@ class Board:
                                        description.translate(literal), say=said.append,
                                        tags=str(tags if tags is not None else self.setting("--hashtags", upload.HASHTAGS)),
                                        thumbnail=picture if picture.is_file() else None)
-                result = {"state": "uploaded", "privacy": privacy, "id": video}
+                result = {"state": "uploaded", "privacy": privacy, "id": video,
+                          "thumbnail": next((line for line in said if line.startswith("thumbnail")), "")}
                 note = f"[review] uploaded {name} ({privacy}): https://youtube.com/shorts/{video}"
-                note += "".join(f"; {line}" for line in said if line.startswith("thumbnail"))
+                note += f"; {result['thumbnail']}" if result["thumbnail"] else ""
                 # kept apart, with its subtitles and thumbnail, to post on other sites by hand
                 (CLIPS / "uploaded").mkdir(exist_ok=True)
                 for path in (clip, clip.with_suffix(".srt"), clip.with_suffix(".json"), picture):
@@ -682,6 +683,24 @@ class Board:
             clip.with_suffix(".json").write_text(json.dumps(parts), encoding="utf-8")
         except (OSError, ValueError):
             pass
+
+    def send_thumbnail(self, name):
+        """Send an uploaded clip's thumbnail to YouTube again, for one that was refused at upload."""
+        clip = clip_path(name)
+        done = self.reviewed.get(str(name), {})
+        if not clip or done.get("state") != "uploaded" or not done.get("id"):
+            return "Only an uploaded clip can get its thumbnail sent"
+        if not clip.with_suffix(".jpg").is_file():
+            return "Make a thumbnail first"
+        try:
+            outcome = upload.set_thumbnail(done["id"], clip.with_suffix(".jpg"))
+        except (Exception, SystemExit) as e:
+            return f"YouTube could not be reached: {e}"
+        with self.lock:
+            self.reviewed[name] = {**done, "thumbnail": outcome}
+            self.keep_reviewed()
+            self.say(f"[review] {name}: {outcome}")
+        return None if outcome == "thumbnail set" else outcome
 
     def clear(self):
         """Delete every clip still waiting for review; uploaded ones in clips/uploaded/ stay."""
@@ -982,6 +1001,8 @@ def make_server(port=0, lan_key=None):
             elif self.path == "/api/review/upload":
                 error = board.publish(body.get("name"), body.get("title"), body.get("description"), body.get("privacy"),
                                       body.get("tags"))
+            elif self.path == "/api/review/send-thumbnail":
+                error = board.send_thumbnail(body.get("name"))
             elif self.path == "/api/review/thumbnail":
                 error = board.thumbnail(body.get("name"), body.get("at"), body.get("text"))
             elif self.path == "/api/review/clear":

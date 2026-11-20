@@ -1204,8 +1204,23 @@ with tempfile.TemporaryDirectory() as folder:
         listed = {c["name"]: c for c in ask("/api/clips")[1]["clips"]}
         assert listed["xqc_20261120_120000.mp4"]["state"] == "uploaded" and listed["xqc_20261120_120000.mp4"]["thumb"]
         assert ask("/api/clip?name=xqc_20261120_120000.mp4") == (200, b"video one"), "it can still be watched"
+        assert listed["xqc_20261120_120000.mp4"]["thumbnail"] == "thumbnail set"
+        # a thumbnail YouTube refused can be sent again later, and its answer is kept on the clip
+        real_set = upload.set_thumbnail
+        try:
+            upload.set_thumbnail = lambda video, picture, http=None: "thumbnail not set: verify yours at youtube.com/verify"
+            assert ask("/api/review/send-thumbnail", {"name": "xqc_20261120_120000.mp4"}) == (
+                400, {"error": "thumbnail not set: verify yours at youtube.com/verify"})
+            upload.set_thumbnail = lambda video, picture, http=None: (video, Path(picture).name) == (
+                "abc123", "xqc_20261120_120000.jpg") and "thumbnail set"
+            assert ask("/api/review/send-thumbnail", {"name": "xqc_20261120_120000.mp4"})[0] == 200
+            assert board.reviewed["xqc_20261120_120000.mp4"]["thumbnail"] == "thumbnail set"
+            assert ask("/api/review/send-thumbnail", {"name": "dinah-kick_20261120_130000.mp4"})[0] == 400, "not uploaded"
+        finally:
+            upload.set_thumbnail = real_set
         assert ask("/api/review/upload", {"name": "xqc_20261120_120000.mp4", "title": "t", "privacy": "private"})[0] == 400
-        assert gui.Board().reviewed["xqc_20261120_120000.mp4"] == {"state": "uploaded", "privacy": "unlisted", "id": "abc123"}
+        assert gui.Board().reviewed["xqc_20261120_120000.mp4"] == {"state": "uploaded", "privacy": "unlisted", "id": "abc123",
+                                                                   "thumbnail": "thumbnail set"}
 
         def refuse(*args, **kw):
             raise RuntimeError("YouTube refused the upload: 403 quotaExceeded")

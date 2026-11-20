@@ -105,11 +105,20 @@ def publish(clip, source, privacy="private", title=TITLE, description=DESCRIPTIO
     video = done.json()["id"]
     say(f"uploaded https://youtube.com/shorts/{video} ({privacy}): {title}")
     if thumbnail and Path(thumbnail).is_file():
-        picture = http.post(THUMB_URL, params={"videoId": video}, data=Path(thumbnail).read_bytes(),
-                            headers={"Content-Type": "image/jpeg"})
-        # a refused thumbnail (an unverified account, say) does not undo the upload
-        say("thumbnail set" if picture.ok else f"thumbnail not set: {picture.status_code} {picture.text[:200]}")
+        say(set_thumbnail(video, thumbnail, http))  # a refused thumbnail does not undo the upload
     return video
+
+
+def set_thumbnail(video, picture, http=None):
+    """Give an uploaded video its thumbnail. Returns "thumbnail set", or why not in plain words."""
+    answer = (http or youtube()).post(THUMB_URL, params={"videoId": video}, data=Path(picture).read_bytes(),
+                                      headers={"Content-Type": "image/jpeg"})
+    if answer.ok:
+        return "thumbnail set"
+    if answer.status_code == 403 and "permissions to upload and set custom video thumbnails" in answer.text:
+        return ("thumbnail not set: YouTube allows custom thumbnails only on verified channels; verify yours at "
+                "youtube.com/verify, then send it again")
+    return f"thumbnail not set: YouTube answered {answer.status_code} {answer.text[:200]}"
 
 
 if __name__ == "__main__":

@@ -633,6 +633,18 @@ function thumbControls(item, c) {
   item.thumbParts = [at, words, make];
   return el("div", {className: "teaser"}, el("label", {htmlFor: id}, "Thumbnail"), at, when, words, make, item.picture);
 }
+function sendThumbButton(item, c) {
+  const button = el("button", {style: "margin-left: 8px"}, "Send thumbnail");
+  button.onclick = async () => {
+    button.disabled = true;
+    try {
+      await api("/api/review/send-thumbnail", {name: c.name});
+      item.state.textContent = "Thumbnail set on YouTube";
+    } catch (error) { item.state.textContent = error.message; item.state.className = "state bad"; }
+    loadClips();
+  };
+  return button;
+}
 function paintClip(item, c) {
   const busy = c.state === "uploading" || c.state === "editing", done = c.state === "uploaded";
   for (const control of [...(item.thumbParts || []), item.tags]) control.disabled = busy || done;
@@ -645,7 +657,9 @@ function paintClip(item, c) {
   item.state.replaceChildren(
     c.state === "editing" ? "Remaking the teaser"
     : busy ? "Uploading"
-    : done ? el("a", {href: "https://youtube.com/shorts/" + c.id, target: "_blank", rel: "noopener"}, "Uploaded (" + c.privacy + ")")
+    : done ? el("span", {}, el("a", {href: "https://youtube.com/shorts/" + c.id, target: "_blank", rel: "noopener"}, "Uploaded (" + c.privacy + ")"),
+                c.thumbnail && c.thumbnail !== "thumbnail set" ? " - " + c.thumbnail : "",
+                c.thumb && c.thumbnail !== "thumbnail set" ? sendThumbButton(item, c) : "")
     : c.state === "failed" ? "Upload failed: " + c.error
     : "Waiting for review");
 }
