@@ -456,7 +456,7 @@ function openShaper(id) {
     id, img, url: null,
     cam: area(s.cam) || {x: 0.02, y: 0.04, w: 0.26, h: 0.26}, game: area(s.game),
     boxes: {game: areaBox("game", "Game"), cam: areaBox("cam", "Cam")},
-    none: el("div", {className: "none"}, "Start the stream to see a picture. The settings can be made now."),
+    none: el("div", {className: "none"}, "No picture yet."),
     shape: el("select", {id: "shape-" + id}), height: el("select", {id: "height-" + id}),
     canvas: el("canvas", {width: 108, height: 192, role: "img", ariaLabel: "Preview of the clip layout"}),
     note: el("p", {ariaLive: "polite"}),
@@ -504,7 +504,7 @@ function openShaper(id) {
   again.onclick = shoot;
   close.onclick = closeShaper;
   fit();
-  if (s.running) shoot();
+  shoot();
   ed.boxes.cam.focus();
 }
 // the clip's shape, the cam panel's height, and the shapes both panels need, from the choices and the settings
@@ -594,7 +594,9 @@ function draw() {
 }
 async function shoot() {
   const ed = shaper;
-  ed.note.textContent = "Getting a picture of the stream";
+  const running = rows.get(ed.id) && rows.get(ed.id).data.running;
+  ed.note.textContent = running ? "Getting a picture of the stream"
+    : "Fetching a few seconds of the stream for a picture; this can take up to half a minute";
   try {
     const response = await fetch("/api/frame?id=" + encodeURIComponent(ed.id), {headers: {"X-Token": token}});
     if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || response.statusText);

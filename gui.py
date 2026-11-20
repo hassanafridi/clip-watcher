@@ -416,16 +416,47 @@ class Board:
                 stream.tell(f"share={share:g}" if share else "share=auto")
                 stream.tell(f"ratio={ratio or shared}")
 
+    @staticmethod
+    def peek(stream):
+        """A still of a stream that is not being recorded: a few seconds of it are fetched just for this."""
+        link = f"https://{'kick.com' if stream.kick else 'twitch.tv'}/{stream.channel}"
+        out = HERE / "rec" / f"peek-{stream.id}.jpg"
+        out.parent.mkdir(exist_ok=True)
+        out.unlink(missing_ok=True)
+        source = subprocess.Popen(
+            [sys.executable, "-m", "streamlink", "--loglevel", "error", "-O", link, "720p,720p60,480p,best"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **watcher.APART)
+        grab = subprocess.Popen(
+            ["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-i", "-", "-frames:v", "1", "-vf", "scale=-2:540",
+             "-q:v", "4", str(out)], stdin=source.stdout, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            **watcher.APART)
+        source.stdout.close()
+        try:
+            grab.wait(45)  # Twitch can hold a viewer in an ad break before the first picture
+        except subprocess.TimeoutExpired:
+            pass
+        finally:
+            for proc in (grab, source):
+                if proc.poll() is None:
+                    watcher.kill_tree(proc)
+        said = source.stderr.read().decode(errors="replace")
+        if out.exists() and out.stat().st_size:
+            return out.read_bytes(), None
+        if "No playable streams" in said or "offline" in said.lower():
+            return None, "Not live right now, so there is no picture. The settings can still be made."
+        return None, "No picture came; try again in a moment"
+
     def frame(self, stream_id):
         """A fresh still of what the stream records, as JPEG bytes, or the reason there is none."""
         with self.lock:
             stream = self.streams.get(stream_id)
             if not stream:
                 return None, "That stream is not on the board"
-            if not stream.proc:
-                return None, "Start the stream to get a picture of it"
-            asked = stream.frames
-            stream.tell("frame")
+            running, asked = stream.proc is not None, stream.frames
+            if running:
+                stream.tell("frame")
+        if not running:
+            return self.peek(stream)
         deadline = time.time() + 12
         while time.time() < deadline:
             with self.lock:

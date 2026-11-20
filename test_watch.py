@@ -985,7 +985,13 @@ with tempfile.TemporaryDirectory() as folder:
                 {"cam": [0.1, 0.1, 0.2, "x"]}):
         assert call("/api/shape", {"id": "twitch-xqc", "cam": box, "ratio": "4:5", **bad})[0] == 400, bad
     assert call("/api/shape", {"id": "nobody", "cam": box})[0] == 400
-    assert call("/api/frame?id=twitch-xqc") == (409, {"error": "Start the stream to get a picture of it"})
+    peeked = []
+    board.peek = lambda s: peeked.append(s.id) or (b"jpeg peek", None)
+    status, (body, _) = call("/api/frame?id=twitch-xqc")
+    assert status == 200 and body == b"jpeg peek" and peeked == ["twitch-xqc"], "a stopped stream is peeked at"
+    board.peek = lambda s: (None, "Not live right now, so there is no picture. The settings can still be made.")
+    assert call("/api/frame?id=twitch-xqc")[0] == 409
+    del board.peek
     # the same exit code without that request is one, and the row says so
     subprocess.Popen = FakeChild
     try:
