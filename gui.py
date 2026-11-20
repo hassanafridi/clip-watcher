@@ -628,19 +628,24 @@ class Board:
         lines += [line] if line else []
         draw = "scale=1080:1920,setsar=1"  # the words sit below the cam panel, so the face stays in view
         cards = []
-        # the look of big YouTube thumbnails: a tall heavy face, yellow then white, a thick outline and a shadow
+        # big-thumbnail lettering in the channel's colours: spike red, then light, with a graphite outline
         size = min(250, round(1080 * 1.9 / max([len(x) for x in lines] or [1])))
         face = next((f"fontfile={watcher.quote(f)}" for f in (HERE / "fonts" / "Anton-Regular.ttf",
                                                               Path("C:/Windows/Fonts/impact.ttf")) if f.exists()),
                     "font='DejaVu Sans:style=Bold'")
+        if lines:  # the channel's chat meter above the words: grey bars, the last one spiking red
+            for i, tall in enumerate((30, 50, 38, 62, 96)):
+                x = 451 + i * 38
+                draw += (f",drawbox=x={x - 5}:y={690 - tall - 5}:w=36:h={tall + 10}:color=0x141415:t=fill,"
+                         f"drawbox=x={x}:y={690 - tall}:w=26:h={tall}:color={'0xE5484D' if i == 4 else '0x85858B'}:t=fill")
         for n, words_on_line in enumerate(lines):
             card = clip.with_suffix(f".thumb{n}.txt")
             card.write_text(words_on_line, encoding="utf-8")
             cards.append(card)
             draw += (f",drawtext=textfile={watcher.quote(card)}:expansion=none:{face}:fontsize={size}:"
-                     f"fontcolor={'0xFFD60A' if n == 0 else 'white'}:borderw={max(6, size // 11)}:bordercolor=black:"
-                     f"shadowcolor=black@0.7:shadowx={size // 22}:shadowy={size // 18}:"
-                     f"x=(w-text_w)/2:y={700 + n * round(size * 1.08)}")
+                     f"fontcolor={'0xE5484D' if n == 0 else '0xEDEDED'}:borderw={max(6, size // 11)}:bordercolor=0x141415:"
+                     f"shadowcolor=0x141415@0.8:shadowx={size // 22}:shadowy={size // 18}:"
+                     f"x=(w-text_w)/2:y={712 + n * round(size * 1.08)}")
         try:
             watcher.run("ffmpeg", "-nostdin", "-y", "-loglevel", "error", "-ss", f"{at:.3f}", "-i", clip,
                         "-frames:v", "1", "-vf", draw, "-q:v", "2", clip.with_suffix(".jpg"))
