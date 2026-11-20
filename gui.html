@@ -399,11 +399,11 @@ function build(groups) {
           ? el("select", {id}, ...opt.choices.map(c => el("option", {value: c}, c)))
           : el("input", {type: "text", id, autocomplete: "off", spellcheck: false});
         // numbers get a short box, templates the full row, everything else a medium one
-        const size = String(opt.default).includes("{") || ["--promo", "--intro", "--outro", "--logo"].includes(opt.flag) ? " wide"
+        const size = String(opt.default).includes("{") || ["--intro", "--outro", "--logo"].includes(opt.flag) ? " wide"
           : opt.unit || opt.kind === "choice" || /^[\d.:]+$/.test(String(opt.default)) ? " short" : "";
         const control = el("div", {className: "control"}, input);
         if (opt.unit) control.append(el("span", {className: "unit"}, opt.unit));
-        if (["--promo", "--intro", "--outro", "--logo"].includes(opt.flag)) control.append(picker(opt.flag, input));
+        if (["--intro", "--outro", "--logo"].includes(opt.flag)) control.append(picker(opt.flag, input));
         field = el("div", {className: "field" + size}, el("label", {htmlFor: id}, opt.label), control);
       }
       input.setAttribute("aria-describedby", helpId + " t" + opt.flag);

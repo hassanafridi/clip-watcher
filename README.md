@@ -145,7 +145,8 @@ Every clip gets these on top of the cut, each one adjustable or off under "Your 
 - `--zoom 0.12`: the picture punches in on the moment chat spiked, with a slow push-in over the clip. The cam panel stays still. `0` turns it off.
 - `--tag=@yourchannel` (with `=`: a word starting with @ on its own loads a preset file): your name, small in a corner. `--logo file.png`: your logo in the other corner.
 - `--intro file.mp4`, `--outro file.mp4`: your own clips before and after.
-- `--promo file.mp4`: a promo, for example a sponsor's, played before the intro. A paid promotion must be declared on YouTube: tick "includes paid promotion" for those videos in YouTube Studio.
+- `--credit "{source}"`: the streamer named on screen, bottom right, for example twitch.tv/ishowspeed; the description also links the stream. Credit is not permission: the streamer can still claim or take down a clip.
+- `--teaser 2.5`: the first seconds of every clip are its best moment, from just before chat exploded, as the hook; then the intro and the whole clip. `0` turns it off.
 - `--chat-box left`: the real chat of the moment, scrolling in a box the way it came in, so viewers see chat explode (`right` or `off`; `--chat-lines` sets how many lines show). Lines from chat bots are left out, and words listed in `chat_filter.txt` are masked as `***`. Chat is unmoderated: add any word you never want burned into your videos to that file.
 
 A starting intro and outro can be drawn for you, with no outside service:

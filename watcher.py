@@ -337,7 +337,7 @@ def chat_box(lines, begin, length, o, top=0, bottom=0):
 
     updates, shown = [], []
     for when, user, text in sorted(lines):
-        if user.lower() in CHAT_BOTS:
+        if user.lower() in CHAT_BOTS or user.lower().endswith("bot"):
             continue
         text = " ".join("***" if masked(word) else word for word in text.split())
         shown = (shown + [entry(user, text)])[-o.chat_lines:]
@@ -751,13 +751,14 @@ def panels(w, h, face, o):
     return o, box, game, panel if o.cam == "top" else 0, panel if o.cam == "bottom" else 0
 
 
-def edit(w, h, face, o, cut, length, spike, rate, sound, subs=None, hook=None, tag=None, extras=(), chat=None):
+def edit(w, h, face, o, cut, length, spike, rate, sound, subs=None, hook=None, tag=None, extras=(), chat=None,
+         credit=None):
     """The whole filter graph of a clip, ending in [v] and [a]: the layout, then the channel's own edits.
 
     cut: seconds dropped from the front of the raw cut; length: seconds left; spike: when chat spiked, in clip
     time; rate: frame rate; sound: whether the cut has sound. subs, hook and tag are files: captions to burn in,
-    the title line, the channel tag; chat is the chat box, an ASS file. extras: (input index, kind, has sound,
-    seconds) per logo, promo, intro or outro.
+    the title line, the channel tag; chat is the chat box, an ASS file; credit names the streamer on screen. extras: (input index, kind, has sound,
+    seconds) per logo, intro or outro.
     """
     o, box, game, top, _ = panels(w, h, face, o)
 
@@ -783,28 +784,38 @@ def edit(w, h, face, o, cut, length, spike, rate, sound, subs=None, hook=None, t
     if tag:
         chain.append(f"drawtext=textfile={quote(tag)}:expansion=none:font=Arial:fontsize={round(H * 0.024)}:"
                      f"fontcolor=white@0.85:borderw=2:x={round(W * 0.04)}:y=h-th-{round(H * 0.03)}")
+    if credit:
+        chain.append(f"drawtext=textfile={quote(credit)}:expansion=none:font=Arial:fontsize={round(H * 0.024)}:"
+                     f"fontcolor=white@0.85:borderw=2:x=w-tw-{round(W * 0.04)}:y=h-th-{round(H * 0.03)}")
     graph.append("[lay]" + (",".join(chain) or "null") + ",format=yuv420p[vm]")
     video = "[vm]"
     for i, kind, _, _ in extras:
         if kind == "logo":
             graph.append(f"[{i}:v]scale={even(W * 0.18)}:-1[logo];{video}[logo]overlay=W-w-{round(W * 0.04)}:"
-                         f"H-h-{round(H * 0.03)},format=yuv420p[vl]")
+                         f"{round(H * 0.02)},format=yuv420p[vl]")  # top right; the bottom corners hold the names
             video = "[vl]"
     graph.append(f"[0:a]atrim=start={cut:.3f},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo[am]"
                  if sound else f"anullsrc=r=48000:cl=stereo,atrim=duration={length:.3f}[am]")
-    parts = []
+    sound_label, parts = "[am]", []
+    if o.teaser > 0:  # the best few seconds first, as the hook: from just before chat spiked
+        a = max(0.0, min(spike - 0.5, length - o.teaser))
+        b = min(length, a + o.teaser)
+        graph.append(f"{video}split[vmain][vt];[vt]trim=start={a:.3f}:end={b:.3f},setpts=PTS-STARTPTS[vteaser]")
+        graph.append(f"[am]asplit[amain][at];[at]atrim=start={a:.3f}:end={b:.3f},asetpts=PTS-STARTPTS[ateaser]")
+        video, sound_label = "[vmain]", "[amain]"
+        parts.append(("teaser", "[vteaser][ateaser]"))
     for i, kind, has_sound, seconds in extras:
-        if kind not in ("promo", "intro", "outro"):
+        if kind not in ("intro", "outro"):
             continue
         graph.append(f"[{i}:v]scale={W}:{H}:force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,"
                      f"setsar=1,fps={rate},format=yuv420p[v{kind}]")
         graph.append(f"[{i}:a]aresample=48000,aformat=channel_layouts=stereo[a{kind}]" if has_sound
                      else f"anullsrc=r=48000:cl=stereo,atrim=duration={seconds:.3f}[a{kind}]")
         parts.append((kind, f"[v{kind}][a{kind}]"))
-    order = ([p for k, p in parts if k == "promo"] + [p for k, p in parts if k == "intro"] + [video + "[am]"]
+    order = ([p for k, p in parts if k == "teaser"] + [p for k, p in parts if k == "intro"] + [video + sound_label]
              + [p for k, p in parts if k == "outro"])
     if len(order) == 1:
-        graph.append(f"{video}null[v];[am]anull[a]")
+        graph.append(f"{video}null[v];{sound_label}anull[a]")
     else:
         graph.append(f"{''.join(order)}concat=n={len(order)}:v=1:a=1[v][a]")
     return ";".join(graph)
@@ -893,7 +904,8 @@ def make_clip(recorder, out, source, args, lag, noticed):
                     log(tag, f"no subtitles for {out.name} ({e})")
             files = {}
             for kind, text in (("hook", o.hook.format(text=opening(said), channel=channel).strip()
-                                if said or "{text}" not in o.hook else ""), ("tag", o.tag or "")):
+                                if said or "{text}" not in o.hook else ""), ("tag", o.tag or ""),
+                               ("credit", (o.credit or "").format(channel=channel, source=source).strip())):
                 if text:
                     files[kind] = RUN / f"{out.stem}.{kind}.txt"
                     files[kind].write_text(text, encoding="utf-8")
@@ -904,7 +916,7 @@ def make_clip(recorder, out, source, args, lag, noticed):
                 files["chat"] = RUN / f"{out.stem}.chat.ass"
                 files["chat"].write_text(board, encoding="utf-8")
             extras, inputs = [], []
-            for kind in ("logo", "promo", "intro", "outro"):
+            for kind in ("logo", "intro", "outro"):
                 path = getattr(o, kind)
                 if path:
                     found, _, seconds = streams(path) if kind != "logo" else (set(), "", 0)
@@ -912,7 +924,7 @@ def make_clip(recorder, out, source, args, lag, noticed):
                     inputs += ["-i", path]
             graph = edit(w, h, face, o, cut, length, spike, rate, "audio" in kinds,
                          srt if o.captions == "burn" and said else None,  # ffmpeg refuses an empty .srt
-                         files.get("hook"), files.get("tag"), extras, files.get("chat"))
+                         files.get("hook"), files.get("tag"), extras, files.get("chat"), files.get("credit"))
             ffmpeg("-i", raw, *inputs, "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
                    "-c:v", "libx264", "-crf", o.crf, "-c:a", "aac", part)
             shutil.move(part, out)
@@ -1124,10 +1136,14 @@ def build_parser():
     own.add_argument("--zoom", type=float, default=0.12,
                      help="how far the picture punches in at the spike, with a slow push-in over the clip; 0 is none")
     own.add_argument("--tag", help="your channel name, shown small in a corner; empty means none")
+    own.add_argument("--credit", default="{source}",
+                     help="the streamer named on screen in the bottom right; {source} is the stream link, "
+                          "{channel} the name; empty means none")
     own.add_argument("--logo", help="image file shown in a corner, for example a PNG of your logo")
     own.add_argument("--intro", help="video file put in front of every clip")
     own.add_argument("--outro", help="video file put after every clip")
-    own.add_argument("--promo", help="video file put before the intro, for example a sponsor's promo")
+    own.add_argument("--teaser", type=float, default=2.5,
+                     help="seconds of the moment chat exploded shown first, before the intro, as the hook; 0 is none")
     own.add_argument("--chat-box", default="left", choices=["left", "right", "off"],
                      help="the real chat of the moment scrolling in a box on that side of the clip")
     own.add_argument("--chat-lines", type=int, default=7, help="how many chat lines the box shows at once")
@@ -1253,7 +1269,9 @@ def main():
     shape(args)
     if not 1 <= args.chat_lines <= 20:
         p.error("--chat-lines must be from 1 to 20")
-    for kind in ("logo", "promo", "intro", "outro"):
+    if not 0 <= args.teaser <= 10:
+        p.error("--teaser must be from 0 to 10 seconds")
+    for kind in ("logo", "intro", "outro"):
         if getattr(args, kind) and not Path(getattr(args, kind)).is_file():
             p.error(f"--{kind}: no file {getattr(args, kind)}")
     if args.zoom < 0 or args.caption_size <= 0 or args.hook_secs < 0:
@@ -1262,6 +1280,10 @@ def main():
         args.hook.format(text="x", channel="x")
     except (KeyError, IndexError, ValueError):
         p.error("--hook may only use {text} and {channel}")
+    try:
+        (args.credit or "").format(channel="x", source="x")
+    except (KeyError, IndexError, ValueError):
+        p.error("--credit may only use {source} and {channel}")
     try:
         upload.describe("x", "x", args.title, args.description)
     except (KeyError, IndexError, ValueError):

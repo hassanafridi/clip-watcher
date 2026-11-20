@@ -128,7 +128,8 @@ cw, ch, cx, cy = map(int, re.findall(r"crop=(\d+):(\d+):(\d+):(\d+)", graph)[0])
 assert (cw, ch) == (640, 360) and (cx, cy) == (1200, 500), graph
 # the cam panel takes the cam box's shape unless its height is set by hand, and stays between 12% and 60%
 edits = SimpleNamespace(width=1080, height=1920, face_h=640, face_zoom=4, big_face=BIG_FACE, cam="top", ratio=9 / 16,
-                        cam_box=(0.7, 0.05, 0.25, 0.25), game_box=None, cam_share=None, zoom=0, caption_size=6, hook_secs=3)
+                        cam_box=(0.7, 0.05, 0.25, 0.25), game_box=None, cam_share=None, zoom=0, caption_size=6, hook_secs=3,
+                        teaser=0)
 assert "scale=1080:606[cam]" in watcher.edit(1920, 1080, None, edits, 0, 30, 20, "60/1", True), "a 16:9 cam gets a 16:9 panel"
 edits.cam_share = 0.25
 assert "scale=1080:480[cam]" in watcher.edit(1920, 1080, None, edits, 0, 30, 20, "60/1", True)
@@ -518,7 +519,7 @@ def run_clip(answer, lag=0, fail=None, probe="1.5\n1.5,34.5\n", speech=None, **o
     args = SimpleNamespace(before=20, after=10, jobs=1, crf=23, model="tiny", language=None, upload=False,
                            ratio=9 / 16, height=1920, face_share=1 / 3, face_zoom=4, big_face=BIG_FACE, cam="top",
                            cam_box=None, game_box=None, cam_share=None, captions="off", caption_size=6, hook="", hook_secs=3, zoom=0, tag=None,
-                           logo=None, intro=None, outro=None, promo=None, chat_box="left", chat_lines=7)
+                           logo=None, intro=None, outro=None, teaser=0, chat_box="left", chat_lines=7, credit="")
     vars(args).update(own)
     try:
         out = watcher.CLIPS / "chan_20260101_000000.mp4"
@@ -585,14 +586,16 @@ with tempfile.TemporaryDirectory() as folder:
     assert "[1:v]" in graph and "[2:v]" in graph and "[3:v]" not in graph, "intro is input 1, outro input 2"
     assert (Path(folder) / "clips" / "chan_20260101_000000.srt").exists() and said[-1].endswith(".srt")
     assert not list(Path(folder).glob("chan_20260101_000000.*")), "no working files are left"
-    # the real chat of the moment goes into a box, and a promo plays before the intro
+    # the real chat of the moment goes into a box, and a teaser of the spike plays before the intro
     watcher.CHAT_LOG["twitch.tv/chan"] = deque([(1_000_000 - 40, "early", "too early"), (1_000_000 - 5, "fan", "LETS GO"),
                                                (1_000_000 + 1, "other", "no way {x}")])
-    run_clip((segment, 36, 34, 1_000_000 - 24), promo=str(extra), intro=str(extra))
+    run_clip((segment, 36, 34, 1_000_000 - 24), teaser=2.5, intro=str(extra), credit="{source}")
     encode = next(c for c in ran if "libx264" in c)
     graph = encode[encode.index("-filter_complex") + 1]
     assert "ass=" in graph, "the chat box is burned in"
-    assert graph.endswith("[vpromo][apromo][vintro][aintro][vm][am]concat=n=3:v=1:a=1[v][a]"), graph[-120:]
+    assert "chan_20260101_000000.credit.txt" in graph and "x=w-tw-" in graph, "the streamer is named on screen"
+    assert graph.endswith("[vteaser][ateaser][vintro][aintro][vmain][amain]concat=n=3:v=1:a=1[v][a]"), graph[-120:]
+    assert "trim=start=19.500:end=22.000" in graph, "the teaser starts just before the spike, 20 s into the clip"
     del watcher.CHAT_LOG["twitch.tv/chan"]
     run_clip((segment, 36, 34, 1_000_000 - 24), speech=False, captions="burn", hook="{text}")
     graph = next(c for c in ran if "libx264" in c)
@@ -631,8 +634,9 @@ assert watcher.chat_box([], 100.0, 30, SimpleNamespace(chat_box="left")) is None
 masks = [w for w in ("Niggas", "nigga!", "spic", "spicy", "raccoon", "coon", "retarded", "fine") if watcher.masked(w)]
 assert masks == ["Niggas", "nigga!", "spic", "coon", "retarded"], masks
 box_o.chat_box = "left"
-ass = watcher.chat_box([(100.0, "Nightbot", "follow!"), (101.0, "fan", "wake up nigga lol")], 100.0, 30, box_o)
-assert "Nightbot" not in ass and "wake up *** lol" in ass
+ass = watcher.chat_box([(100.0, "Nightbot", "follow!"), (100.5, "kaimafiabot", "!watchtime"),
+                        (101.0, "fan", "wake up nigga lol")], 100.0, 30, box_o)
+assert "Nightbot" not in ass and "kaimafiabot" not in ass and "wake up *** lol" in ass
 
 # --- commands from the board on stdin: quit is still heard after stop ---
 quits = []
@@ -1192,12 +1196,12 @@ with tempfile.TemporaryDirectory() as folder:
     # a promo, intro, outro or logo picked on the page is copied into brand/
     real_here, gui.HERE = gui.HERE, Path(folder)
     try:
-        request = urllib.request.Request(f"http://127.0.0.1:{httpd.server_port}/api/media?kind=promo&name=My%20Promo!.mp4",
+        request = urllib.request.Request(f"http://127.0.0.1:{httpd.server_port}/api/media?kind=intro&name=My%20Intro!.mp4",
                                          data=b"promo bytes", headers={"X-Token": token})
         with urllib.request.urlopen(request, timeout=5) as r:
-            assert json.loads(r.read()) == {"path": "brand/promo-My-Promo.mp4"}
-        assert (Path(folder) / "brand" / "promo-My-Promo.mp4").read_bytes() == b"promo bytes"
-        for query in ("kind=evil&name=x.mp4", "kind=promo&name=x.exe", "kind=logo&name=x.mp4", "kind=promo&name=..%2F..%2Fx.mp4"):
+            assert json.loads(r.read()) == {"path": "brand/intro-My-Intro.mp4"}
+        assert (Path(folder) / "brand" / "intro-My-Intro.mp4").read_bytes() == b"promo bytes"
+        for query in ("kind=evil&name=x.mp4", "kind=intro&name=x.exe", "kind=logo&name=x.mp4", "kind=intro&name=..%2F..%2Fx.mp4"):
             request = urllib.request.Request(f"http://127.0.0.1:{httpd.server_port}/api/media?{query}", data=b"x",
                                              headers={"X-Token": token})
             try:
@@ -1206,8 +1210,8 @@ with tempfile.TemporaryDirectory() as folder:
             except urllib.error.HTTPError as e:
                 assert e.code == 400, query
         assert not any(Path(folder).glob("x.mp4")) and [f.name for f in (Path(folder) / "brand").iterdir()] == [
-            "promo-My-Promo.mp4", "promo-x.mp4"], list((Path(folder) / "brand").iterdir())
-        request = urllib.request.Request(f"http://127.0.0.1:{httpd.server_port}/api/media?kind=promo&name=x.mp4",
+            "intro-My-Intro.mp4", "intro-x.mp4"], list((Path(folder) / "brand").iterdir())
+        request = urllib.request.Request(f"http://127.0.0.1:{httpd.server_port}/api/media?kind=intro&name=x.mp4",
                                          data=b"x", headers={"X-Token": "wrong"})
         try:
             urllib.request.urlopen(request, timeout=5)

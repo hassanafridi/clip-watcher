@@ -55,7 +55,7 @@ LABELS = {
     "--captions": ("Captions", ""), "--caption-size": ("Caption size", "%"), "--hook": ("Title line", ""),
     "--hook-secs": ("Title line shown for", "s"), "--zoom": ("Zoom at the spike", ""),
     "--tag": ("Channel tag", ""), "--logo": ("Logo image", ""), "--intro": ("Intro video", ""),
-    "--outro": ("Outro video", ""), "--promo": ("Promo video", ""), "--chat-box": ("Chat box", ""),
+    "--outro": ("Outro video", ""), "--teaser": ("Teaser at the start", "s"), "--credit": ("Streamer credit", ""), "--chat-box": ("Chat box", ""),
     "--chat-lines": ("Chat lines shown", ""),
 }
 # shown when a setting is hovered or focused: what it is for and when to change it
@@ -128,8 +128,11 @@ DETAILS = {
     "--intro": "Path of a short video put in front of every clip. Keep it under 2 seconds: Shorts viewers "
                "swipe away from slow starts.",
     "--outro": "Path of a short video put after every clip, for example asking viewers to follow.",
-    "--promo": "Path of a video put before the intro, for example a sponsor's promo. A paid promotion has to be "
-               "declared on YouTube: tick 'includes paid promotion' for those uploads in YouTube Studio.",
+    "--credit": "Names the streamer on screen in the bottom right of every clip, for example twitch.tv/ishowspeed. "
+                "{source} is the stream link, {channel} the name. Credit is good manners and YouTube viewers expect it, "
+                "but it is not permission: the streamer can still claim or take down a clip.",
+    "--teaser": "A few seconds of the best moment, from just before chat exploded, shown first as the hook, "
+                "before your intro; then the whole clip plays. 2.5 is a quick cold open, 0 turns it off.",
     "--chat-box": "Shows the real chat of the moment in a box on the left or right of the clip, scrolling the way "
                   "it came in, so viewers see chat explode. Off leaves it out.",
     "--chat-lines": "How many chat lines the box holds at once. More lines make a taller box.",
@@ -592,10 +595,10 @@ class Board:
 
     @staticmethod
     def media(query, headers, body):
-        """Keep a file picked on the page (promo, intro, outro or logo) in brand/, and say where it went."""
+        """Keep a file picked on the page (intro, outro or logo) in brand/, and say where it went."""
         kind, name = query.get("kind", [""])[0], query.get("name", [""])[0]
         suffix = Path(name).suffix.lower()
-        if kind not in ("promo", "intro", "outro", "logo") or suffix not in (
+        if kind not in ("intro", "outro", "logo") or suffix not in (
                 (".png", ".jpg", ".jpeg", ".webp") if kind == "logo" else (".mp4", ".mov", ".mkv", ".webm")):
             return 400, {"error": "Pick a video file (an image for the logo)"}
         try:
