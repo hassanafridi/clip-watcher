@@ -590,6 +590,37 @@ class Board:
             self.keep_reviewed()
             self.say(f"[review] deleted {name}")
 
+    @staticmethod
+    def media(query, headers, body):
+        """Keep a file picked on the page (promo, intro, outro or logo) in brand/, and say where it went."""
+        kind, name = query.get("kind", [""])[0], query.get("name", [""])[0]
+        suffix = Path(name).suffix.lower()
+        if kind not in ("promo", "intro", "outro", "logo") or suffix not in (
+                (".png", ".jpg", ".jpeg", ".webp") if kind == "logo" else (".mp4", ".mov", ".mkv", ".webm")):
+            return 400, {"error": "Pick a video file (an image for the logo)"}
+        try:
+            length = int(headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if not 0 < length <= 500_000_000:
+            return 400, {"error": "The file must be under 500 MB"}
+        folder = HERE / "brand"
+        folder.mkdir(exist_ok=True)
+        stem = re.sub(r"[^A-Za-z0-9_-]+", "-", Path(name).stem).strip("-")[:40] or kind
+        target = folder / f"{kind}-{stem}{suffix}"
+        with open(target, "wb") as out:
+            left = length
+            while left:
+                chunk = body.read(min(left, 1 << 20))
+                if not chunk:
+                    break
+                out.write(chunk)
+                left -= len(chunk)
+        if left:
+            target.unlink(missing_ok=True)
+            return 400, {"error": "The file did not arrive whole; try again"}
+        return 200, {"path": f"brand/{target.name}"}
+
     def state(self, since):
         with self.lock:
             return {
@@ -679,6 +710,8 @@ def make_server(port=0):
                 self.reply(500, {"error": f"clip-watcher could not do that: {e}"})
 
         def act(self):
+            if self.path.startswith("/api/media?"):
+                return self.reply(*board.media(parse_qs(self.path.partition("?")[2]), self.headers, self.rfile))
             try:
                 length = int(self.headers.get("Content-Length") or 0)
                 if length > 65536:

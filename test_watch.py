@@ -1189,6 +1189,33 @@ with tempfile.TemporaryDirectory() as folder:
     assert ask("/api/review/delete", {"name": "xqc_20261120_120000.mp4"})[0] == 400
     assert ask("/api/review/delete", {"name": "../streams.json"})[0] == 400
 
+    # a promo, intro, outro or logo picked on the page is copied into brand/
+    real_here, gui.HERE = gui.HERE, Path(folder)
+    try:
+        request = urllib.request.Request(f"http://127.0.0.1:{httpd.server_port}/api/media?kind=promo&name=My%20Promo!.mp4",
+                                         data=b"promo bytes", headers={"X-Token": token})
+        with urllib.request.urlopen(request, timeout=5) as r:
+            assert json.loads(r.read()) == {"path": "brand/promo-My-Promo.mp4"}
+        assert (Path(folder) / "brand" / "promo-My-Promo.mp4").read_bytes() == b"promo bytes"
+        for query in ("kind=evil&name=x.mp4", "kind=promo&name=x.exe", "kind=logo&name=x.mp4", "kind=promo&name=..%2F..%2Fx.mp4"):
+            request = urllib.request.Request(f"http://127.0.0.1:{httpd.server_port}/api/media?{query}", data=b"x",
+                                             headers={"X-Token": token})
+            try:
+                urllib.request.urlopen(request, timeout=5)
+                assert query.endswith("x.mp4") and "..%2F" in query, query
+            except urllib.error.HTTPError as e:
+                assert e.code == 400, query
+        assert not any(Path(folder).glob("x.mp4")) and [f.name for f in (Path(folder) / "brand").iterdir()] == [
+            "promo-My-Promo.mp4", "promo-x.mp4"], list((Path(folder) / "brand").iterdir())
+        request = urllib.request.Request(f"http://127.0.0.1:{httpd.server_port}/api/media?kind=promo&name=x.mp4",
+                                         data=b"x", headers={"X-Token": "wrong"})
+        try:
+            urllib.request.urlopen(request, timeout=5)
+            raise AssertionError("another website cannot drop files here")
+        except urllib.error.HTTPError as e:
+            assert e.code == 403
+    finally:
+        gui.HERE = real_here
     # a stream started from the board never uploads on its own, even with the upload setting on
     board.add("xqc", 15, 2.5)
     board.shared = ["--upload", "--privacy=public"]
