@@ -142,7 +142,7 @@ Every clip gets these on top of the cut, each one adjustable or off under "Your 
 
 A starting intro and outro can be drawn for you, with no outside service:
 
-    python brand.py "Chat Went Off" --handle @chatwentoff
+    python brand.py "Chat Went Off" --handle @chatwentoff-official
 
 That writes `brand/intro.mp4` (1.2 s) and `brand/outro.mp4` (2 s); set `--intro brand/intro.mp4 --outro brand/outro.mp4`.
 

@@ -39,7 +39,7 @@ def render(out, seconds, video, audio):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("name", nargs="?", default="Chat Went Off", help="channel name shown in both")
-    p.add_argument("--handle", default="@chatwentoff", help="handle shown in the outro")
+    p.add_argument("--handle", default="@chatwentoff-official", help="handle shown in the outro")
     args = p.parse_args()
     folder = HERE / "brand"
     folder.mkdir(exist_ok=True)
