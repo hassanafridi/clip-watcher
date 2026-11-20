@@ -1132,7 +1132,8 @@ def build_parser():
                      help="the real chat of the moment scrolling in a box on that side of the clip")
     own.add_argument("--chat-lines", type=int, default=7, help="how many chat lines the box shows at once")
     yt = p.add_argument_group("YouTube")
-    yt.add_argument("--upload", action="store_true", help="upload every clip to YouTube Shorts")
+    yt.add_argument("--upload", action="store_true",
+                    help="terminal runs only: upload every clip without review; the board waits for your Upload")
     yt.add_argument("--privacy", default="private", choices=["private", "unlisted", "public"],
                     help="who can see uploaded clips")
     yt.add_argument("--title", default=upload.TITLE,
