@@ -23,6 +23,13 @@ PAGE = HERE / "gui.html"
 SAVED = HERE / "streams.json"
 CLIPS = HERE / "clips"  # where watcher.py saves clips; clips.json there remembers what was reviewed
 CLIP_NAME = re.compile(r"[A-Za-z0-9_-]{1,80}\.mp4")
+
+
+def clip_path(name):
+    """Where a clip is: in clips/, or in clips/uploaded/ once it went out. None for anything else."""
+    if not CLIP_NAME.fullmatch(str(name)):
+        return None
+    return next((p for p in (CLIPS / name, CLIPS / "uploaded" / name) if p.is_file()), None)
 PORT = 8791  # gui.html looks for the helper here when it is opened straight from disk
 KEEP = 2000  # log lines held for the page
 HISTORY = 60  # chat counts kept per stream for its chart
@@ -51,7 +58,7 @@ LABELS = {
     "--model": ("Subtitle model", ""), "--language": ("Subtitle language", ""),
     "--jobs": ("Clips finished at once", ""),
     "--upload": ("Upload to YouTube Shorts", ""), "--privacy": ("Visibility", ""),
-    "--title": ("Title template", ""), "--description": ("Description template", ""),
+    "--title": ("Title template", ""), "--description": ("Description template", ""), "--hashtags": ("Hashtags", ""),
     "--captions": ("Captions", ""), "--caption-size": ("Caption size", "%"), "--hook": ("Title line", ""),
     "--hook-secs": ("Title line shown for", "s"), "--zoom": ("Zoom at the spike", ""),
     "--tag": ("Channel tag", ""), "--logo": ("Logo image", ""), "--intro": ("Intro video", ""),
@@ -112,6 +119,9 @@ DETAILS = {
                  "public is everyone.",
     "--title": "Title given to each upload. {text} becomes the first words spoken in the clip "
                "and {channel} the streamer's name.",
+    "--hashtags": "Hashtags put at the end of every description. {channel} becomes the streamer's name, {site} twitch or "
+                  "kick; #Shorts is always added. Keep them few and true to the clip: YouTube ignores a video's hashtags "
+                  "when it has more than 60, and misleading ones can get it removed.",
     "--description": "Description given to each upload, with the same {text} and {channel} placeholders. "
                      "A credit link to the stream is added for you.",
     "--captions": "Burn puts what is said into the picture, a few words at a time, the way Shorts viewers expect. "
@@ -522,8 +532,11 @@ class Board:
         out = []
         with self.lock:
             reviewed = dict(self.reviewed)
-        files = sorted(CLIPS.glob("*.mp4"), key=lambda f: f.stat().st_mtime, reverse=True) if CLIPS.is_dir() else []
-        for clip in files[:60]:  # ponytail: newest 60 only; older clips stay on disk untouched
+        def newest(folder, n):
+            return sorted(folder.glob("*.mp4"), key=lambda f: f.stat().st_mtime, reverse=True)[:n] if folder.is_dir() else []
+
+        # the newest 60 waiting and the newest 20 uploaded; older ones stay on disk untouched
+        for clip in newest(CLIPS, 60) + newest(CLIPS / "uploaded", 20):
             if not CLIP_NAME.fullmatch(clip.name):
                 continue
             channel, source = clip_source(clip.name)
@@ -533,9 +546,15 @@ class Board:
                                                      self.setting("--description", upload.DESCRIPTION))
             except (KeyError, IndexError, ValueError):
                 title, description = upload.describe(upload.transcript(clip.with_suffix(".srt")), channel)
+            try:
+                layout_of = json.loads(clip.with_suffix(".json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                layout_of = None  # made before clips said how they are put together: no teaser choice
             out.append({"name": clip.name, "channel": channel, "source": source, "made": int(clip.stat().st_mtime),
+                        "parts": layout_of, "thumb": clip.with_suffix(".jpg").is_file(),
+                        "tags": upload.hashtags(self.setting("--hashtags", upload.HASHTAGS), source),
                         "mb": round(clip.stat().st_size / 1e6, 1), "title": title, "description": description,
-                        **reviewed.get(clip.name, {"state": "waiting"})})
+                        **reviewed.get(clip.name, {"state": "uploaded" if clip.parent.name == "uploaded" else "waiting"})})
         return {"clips": out, "privacy": self.setting("--privacy", "private")}
 
     def keep_reviewed(self):
@@ -546,8 +565,8 @@ class Board:
         except OSError:
             pass
 
-    def publish(self, name, title, description, privacy):
-        """Upload one reviewed clip in the background; the clip list shows how it went."""
+    def publish(self, name, title, description, privacy, tags=None):
+        """Upload one reviewed clip in the background, then keep it in clips/uploaded/; the clip list shows how it went."""
         clip = CLIPS / str(name)
         if not CLIP_NAME.fullmatch(str(name)) or not clip.is_file():
             return "That clip is not there any more"
@@ -557,18 +576,28 @@ class Board:
         if not title or len(title) > 100:
             return "The title must have 1 to 100 characters"
         with self.lock:
-            if self.reviewed.get(name, {}).get("state") in ("uploading", "uploaded"):
-                return "That clip is already uploading or uploaded"
+            if self.reviewed.get(name, {}).get("state") in ("uploading", "uploaded", "editing"):
+                return "That clip is uploading, uploaded or being remade"
             self.reviewed[name] = {"state": "uploading", "privacy": privacy}
             self.keep_reviewed()
 
         def send():
             literal = {ord("{"): "{{", ord("}"): "}}"}  # the text as typed, not a template
             try:
+                said = []
+                picture = clip.with_suffix(".jpg")
                 video = upload.publish(clip, clip_source(name)[1], privacy, title.translate(literal),
-                                       description.translate(literal), say=lambda text: None)
+                                       description.translate(literal), say=said.append,
+                                       tags=str(tags if tags is not None else self.setting("--hashtags", upload.HASHTAGS)),
+                                       thumbnail=picture if picture.is_file() else None)
                 result = {"state": "uploaded", "privacy": privacy, "id": video}
                 note = f"[review] uploaded {name} ({privacy}): https://youtube.com/shorts/{video}"
+                note += "".join(f"; {line}" for line in said if line.startswith("thumbnail"))
+                # kept apart, with its subtitles and thumbnail, to post on other sites by hand
+                (CLIPS / "uploaded").mkdir(exist_ok=True)
+                for path in (clip, clip.with_suffix(".srt"), clip.with_suffix(".json"), picture):
+                    if path.exists():
+                        os.replace(path, CLIPS / "uploaded" / path.name)
             except (Exception, SystemExit) as e:  # a refused upload must reach the page, not end the server
                 result = {"state": "failed", "error": str(e)[:300]}
                 note = f"[review] upload of {name} failed: {e}"
@@ -579,15 +608,115 @@ class Board:
 
         threading.Thread(target=send, daemon=True).start()
 
+    def thumbnail(self, name, at, text):
+        """Make the clip's thumbnail: its frame at `at` seconds, with big words on it, as <clip>.jpg."""
+        clip = clip_path(name)
+        if not clip:
+            return "That clip is not there any more"
+        try:
+            at = max(0.0, float(at))
+        except (TypeError, ValueError):
+            return "Pick a moment in the clip"
+        words = " ".join(str(text or "").split()).upper()[:60]
+        lines, line = [], ""
+        for word in words.split():  # two or three short lines read best on a phone
+            if line and len(line) + 1 + len(word) > 14:
+                lines.append(line)
+                line = word
+            else:
+                line = f"{line} {word}".strip()
+        lines += [line] if line else []
+        draw = "scale=1080:1920,setsar=1"  # the words sit below the cam panel, so the face stays in view
+        if lines:
+            card = clip.with_suffix(".thumb.txt")
+            card.write_text("\n".join(lines), encoding="utf-8", newline="\n")  # a CR would draw as an extra line
+            size = min(150, round(1080 * 1.5 / max(len(x) for x in lines)))
+            bold = Path("C:/Windows/Fonts/arialbd.ttf")
+            face = f"fontfile={watcher.quote(bold)}" if bold.exists() else "font='DejaVu Sans:style=Bold'"
+            draw += (f",drawbox=x=0:y=700:w=iw:h={len(lines) * size * 1.25 + 80:.0f}:color=black@0.55:t=fill,"
+                     f"drawbox=x=0:y=700:w=24:h={len(lines) * size * 1.25 + 80:.0f}:color=0xe5484d:t=fill,"
+                     f"drawtext=textfile={watcher.quote(card)}:expansion=none:{face}:fontsize={size}:fontcolor=white:"
+                     f"line_spacing={size // 4}:borderw={max(3, size // 18)}:bordercolor=black:x=(w-text_w)/2:y=740")
+        try:
+            watcher.run("ffmpeg", "-nostdin", "-y", "-loglevel", "error", "-ss", f"{at:.3f}", "-i", clip,
+                        "-frames:v", "1", "-vf", draw, "-q:v", "2", clip.with_suffix(".jpg"))
+        except RuntimeError as e:
+            return f"The thumbnail could not be made: {e}"
+        finally:
+            clip.with_suffix(".thumb.txt").unlink(missing_ok=True)
+
+    def clear(self):
+        """Delete every clip still waiting for review; uploaded ones in clips/uploaded/ stay."""
+        gone = 0
+        with self.lock:
+            for clip in CLIPS.glob("*.mp4") if CLIPS.is_dir() else []:
+                if CLIP_NAME.fullmatch(clip.name) and self.reviewed.get(clip.name, {}).get("state") not in (
+                        "uploading", "editing"):
+                    for path in (clip, clip.with_suffix(".srt"), clip.with_suffix(".json"), clip.with_suffix(".jpg")):
+                        path.unlink(missing_ok=True)
+                    self.reviewed.pop(clip.name, None)
+                    gone += 1
+            self.keep_reviewed()
+            self.say(f"[review] deleted {gone} waiting clips")
+
+    def reteaser(self, name, start, seconds):
+        """Cut the teaser again from another moment of the clip (or drop it), in the background."""
+        clip = CLIPS / str(name)
+        if not CLIP_NAME.fullmatch(str(name)) or not clip.is_file():
+            return "That clip is not there any more"
+        try:
+            parts = json.loads(clip.with_suffix(".json").read_text(encoding="utf-8"))
+            start, seconds = float(start), float(seconds)
+        except (OSError, ValueError, TypeError):
+            return "This clip was made before teasers could be changed"
+        if not (seconds == 0 or 1 <= seconds <= 10) or not 0 <= start <= max(0, parts["main"] - seconds):
+            return "The teaser must be 1 to 10 seconds long and lie inside the clip"
+        with self.lock:
+            if self.reviewed.get(name, {}).get("state") in ("uploading", "uploaded", "editing"):
+                return "That clip is uploading, uploaded or being remade"
+            self.reviewed[name] = {"state": "editing"}
+
+        def remake():
+            main_at = parts["teaser"] + parts["intro"]  # the old teaser and the intro come before the clip itself
+            first = f"{main_at + start:.3f}"
+            graph = (f"[0:v]trim=start={parts['teaser']:.3f},setpts=PTS-STARTPTS[rv];"
+                     f"[0:a]atrim=start={parts['teaser']:.3f},asetpts=PTS-STARTPTS[ra]")
+            if seconds:
+                graph = (f"[0:v]split[v1][v2];[0:a]asplit[a1][a2];"
+                         f"[v1]trim=start={first}:duration={seconds:.3f},setpts=PTS-STARTPTS[tv];"
+                         f"[a1]atrim=start={first}:duration={seconds:.3f},asetpts=PTS-STARTPTS[ta];"
+                         f"[v2]trim=start={parts['teaser']:.3f},setpts=PTS-STARTPTS[rv];"
+                         f"[a2]atrim=start={parts['teaser']:.3f},asetpts=PTS-STARTPTS[ra];"
+                         "[tv][ta][rv][ra]concat=n=2:v=1:a=1[v][a]")
+            else:
+                graph = graph.replace("[rv]", "[v]").replace("[ra]", "[a]")
+            fresh = clip.with_name(clip.stem + ".remake.mp4")
+            try:
+                watcher.run("ffmpeg", "-nostdin", "-y", "-loglevel", "error", "-i", clip, "-filter_complex", graph,
+                            "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-crf", "20", "-c:a", "aac", fresh)
+                os.replace(fresh, clip)
+                parts.update(teaser=round(seconds, 3), teaser_from=round(start, 3))
+                clip.with_suffix(".json").write_text(json.dumps(parts), encoding="utf-8")
+                note = f"[review] new teaser for {name}" if seconds else f"[review] teaser taken out of {name}"
+            except (RuntimeError, OSError) as e:
+                fresh.unlink(missing_ok=True)
+                note = f"[review] could not remake {name}: {e}"
+            with self.lock:
+                self.reviewed.pop(name, None)
+                self.keep_reviewed()
+                self.say(note)
+
+        threading.Thread(target=remake, daemon=True).start()
+
     def discard(self, name):
         """Delete a clip that should never go out, with its subtitles."""
         clip = CLIPS / str(name)
         if not CLIP_NAME.fullmatch(str(name)) or not clip.is_file():
             return "That clip is not there any more"
         with self.lock:
-            if self.reviewed.get(name, {}).get("state") == "uploading":
-                return "That clip is uploading right now"
-            for path in (clip, clip.with_suffix(".srt")):
+            if self.reviewed.get(name, {}).get("state") in ("uploading", "editing"):
+                return "That clip is uploading or being remade right now"
+            for path in (clip, clip.with_suffix(".srt"), clip.with_suffix(".json"), clip.with_suffix(".jpg")):
                 path.unlink(missing_ok=True)
             self.reviewed.pop(name, None)
             self.keep_reviewed()
@@ -686,12 +815,12 @@ def make_server(port=0):
                 self.reply(200, board.state(int(since) if since.isdigit() else 0))
             elif path == "/api/clips":
                 self.reply(200, board.clips())
-            elif path == "/api/clip":
-                name = parse_qs(query).get("name", [""])[0]
-                clip = CLIPS / name
-                if not CLIP_NAME.fullmatch(name) or not clip.is_file():
+            elif path in ("/api/clip", "/api/thumb"):
+                clip = clip_path(parse_qs(query).get("name", [""])[0])
+                picture = clip.with_suffix(".jpg") if clip and path == "/api/thumb" else clip
+                if not picture or not picture.is_file():
                     return self.reply(404, {"error": "That clip is not there any more"})
-                self.reply(200, clip.read_bytes(), "video/mp4")
+                self.reply(200, picture.read_bytes(), "video/mp4" if path == "/api/clip" else "image/jpeg")
             elif path == "/api/frame":
                 picture, error = board.frame(parse_qs(query).get("id", [""])[0])
                 self.reply(200, picture, "image/jpeg") if picture else self.reply(409, {"error": error})
@@ -762,12 +891,19 @@ def make_server(port=0):
                          "id": f"{site}-{c['channel'].lower()}"} for c in found if watcher.parse_channel(c["channel"])]
                 return self.reply(200, {"category": name, "site": site, "streams": rows})
             elif self.path == "/api/review/upload":
-                error = board.publish(body.get("name"), body.get("title"), body.get("description"), body.get("privacy"))
+                error = board.publish(body.get("name"), body.get("title"), body.get("description"), body.get("privacy"),
+                                      body.get("tags"))
+            elif self.path == "/api/review/thumbnail":
+                error = board.thumbnail(body.get("name"), body.get("at"), body.get("text"))
+            elif self.path == "/api/review/clear":
+                board.clear()
+            elif self.path == "/api/review/teaser":
+                error = board.reteaser(body.get("name"), body.get("start"), body.get("seconds"))
             elif self.path == "/api/review/delete":
                 error = board.discard(body.get("name"))
             elif self.path == "/api/open-clips":
-                folder = HERE / "clips"
-                folder.mkdir(exist_ok=True)
+                folder = CLIPS / "uploaded" if body.get("folder") == "uploaded" else CLIPS
+                folder.mkdir(parents=True, exist_ok=True)
                 if sys.platform == "win32":
                     os.startfile(folder)
                 else:

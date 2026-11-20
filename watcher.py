@@ -739,6 +739,12 @@ def streams(path):
     return set(kinds), rate if re.fullmatch(r"\d+/[1-9]\d*", rate) and not rate.startswith("0/") else "30/1", seconds
 
 
+def teaser_span(seconds, spike, length):
+    """Where the teaser is cut from, in clip time: from just before chat spiked, inside the clip."""
+    a = max(0.0, min(spike - 0.5, length - seconds))
+    return a, min(length, a + seconds)
+
+
 def panels(w, h, face, o):
     """The clip's settings with the cam panel's height worked out, the hand-set areas in pixels, and how much
     of the clip the cam panel takes at the top and at the bottom."""
@@ -798,8 +804,7 @@ def edit(w, h, face, o, cut, length, spike, rate, sound, subs=None, hook=None, t
                  if sound else f"anullsrc=r=48000:cl=stereo,atrim=duration={length:.3f}[am]")
     sound_label, parts = "[am]", []
     if o.teaser > 0:  # the best few seconds first, as the hook: from just before chat spiked
-        a = max(0.0, min(spike - 0.5, length - o.teaser))
-        b = min(length, a + o.teaser)
+        a, b = teaser_span(o.teaser, spike, length)
         graph.append(f"{video}split[vmain][vt];[vt]trim=start={a:.3f}:end={b:.3f},setpts=PTS-STARTPTS[vteaser]")
         graph.append(f"[am]asplit[amain][at];[at]atrim=start={a:.3f}:end={b:.3f},asetpts=PTS-STARTPTS[ateaser]")
         video, sound_label = "[vmain]", "[amain]"
@@ -928,13 +933,19 @@ def make_clip(recorder, out, source, args, lag, noticed):
             ffmpeg("-i", raw, *inputs, "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
                    "-c:v", "libx264", "-crf", o.crf, "-c:a", "aac", part)
             shutil.move(part, out)
+            # how the clip is put together, so the board can cut a different teaser from it later
+            a, b = teaser_span(o.teaser, spike, length) if o.teaser > 0 else (0.0, 0.0)
+            out.with_suffix(".json").write_text(json.dumps({
+                "teaser": round(b - a, 3), "teaser_from": round(a, 3), "spike": round(spike, 3), "main": round(length, 3),
+                "intro": round(next((x[3] for x in extras if x[1] == "intro"), 0.0), 3)}), encoding="utf-8")
             if o.captions != "off" and said:
                 shutil.move(srt, out.with_suffix(".srt"))
                 log(tag, f"saved {out} and {out.with_suffix('.srt').name}")
             else:
                 log(tag, f"saved {out}")
             if args.upload:
-                upload.publish(out, source, args.privacy, args.title, args.description, lambda text: log(tag, text))
+                upload.publish(out, source, args.privacy, args.title, args.description, lambda text: log(tag, text),
+                               args.hashtags)
         finally:
             slot.close()
     except Exception as e:  # one bad clip must not take the channel down
@@ -1154,6 +1165,9 @@ def build_parser():
                     help="who can see uploaded clips")
     yt.add_argument("--title", default=upload.TITLE,
                     help="title of the upload; {text} is what was said, {channel} the channel name")
+    yt.add_argument("--hashtags", default=upload.HASHTAGS,
+                    help="hashtags added to every upload; {channel} is the streamer, {site} twitch or kick; "
+                         "#Shorts is always added")
     yt.add_argument("--description", default=upload.DESCRIPTION,
                     help="description of the upload; same placeholders as the title")
     return p

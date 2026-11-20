@@ -156,6 +156,12 @@ main { max-width: 1440px; margin: 0 auto; padding: 32px; display: grid; gap: 40p
 .clip .state { font-size: 13px; color: var(--text-2); }
 .clip .state.bad { color: var(--tally); }
 .clip.done { opacity: 0.6; }
+.clip .teaser { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 12px; font-size: 13px; color: var(--text-2); }
+.clip .teaser input[type="range"] { width: 220px; accent-color: var(--tally); }
+.clip .teaser select { width: auto; height: 32px; }
+.clip .teaser button { height: 32px; padding: 0 12px; }
+.clip .teaser input[type="text"] { width: 220px; height: 32px; }
+.clip .shot-thumb { width: 54px; aspect-ratio: 9 / 16; object-fit: cover; border-radius: 4px; border: 1px solid var(--line-strong); }
 
 #log {
   margin: 0; height: 220px; overflow: auto; padding: 12px; background: var(--card);
@@ -296,7 +302,11 @@ aside h2 { margin-bottom: 16px; }
   <section>
     <div class="head">
       <h2>Clips to review</h2>
-      <div class="tools"><button id="review-refresh">Refresh</button></div>
+      <div class="tools">
+        <button id="review-refresh">Refresh</button>
+        <button id="review-uploaded">Open uploaded folder</button>
+        <button id="review-clear">Delete all waiting</button>
+      </div>
     </div>
     <p class="help">Nothing is uploaded until you watch the clip and press Upload. Delete anything that shows nudity,
       hate or other content YouTube removes. By uploading you confirm the clip follows YouTube's Terms of Service
@@ -507,23 +517,28 @@ function clipItem(c, privacy) {
     look: el("div", {className: "look"}, el("button", {onclick: () => watch(item, c.name)}, "Watch")),
     title: el("input", {type: "text", id: id + "-t", maxLength: 100, value: c.title}),
     description: el("textarea", {id: id + "-d", value: c.description}),
+    tags: el("input", {type: "text", id: id + "-h", value: c.tags}),
     privacy: el("select", {ariaLabel: "Who can see it"},
                 ...["private", "unlisted", "public"].map(v => el("option", {value: v}, v))),
     send: el("button", {className: "go"}, "Upload"), drop: el("button", {}, "Delete"),
     state: el("span", {className: "state", ariaLive: "polite"}),
   };
   item.privacy.value = privacy;
+  const teaser = c.parts ? teaserControls(item, c) : null;
   const when = new Date(c.made * 1000).toLocaleString();
   item.root = el("div", {className: "clip"}, item.look, el("div", {},
     el("div", {className: "facts"}, el("strong", {}, c.channel), ` - ${when} - ${c.mb} MB`),
     el("label", {htmlFor: item.title.id}, "Title"), item.title,
-    el("label", {htmlFor: item.description.id}, "Description (the stream link and #Shorts are added)"), item.description,
+    el("label", {htmlFor: item.description.id}, "Description (the stream link is added)"), item.description,
+    el("label", {htmlFor: item.tags.id}, "Hashtags"), item.tags,
+    thumbControls(item, c),
+    ...(teaser ? [teaser] : []),
     el("div", {className: "acts"}, item.privacy, item.send, item.drop, item.state)));
   item.send.onclick = async () => {
     item.send.disabled = true;
     try {
       await api("/api/review/upload", {name: c.name, title: item.title.value, description: item.description.value,
-                                        privacy: item.privacy.value});
+                                        privacy: item.privacy.value, tags: item.tags.value});
     } catch (error) { item.state.textContent = error.message; item.state.className = "state bad"; }
     loadClips();
   };
@@ -535,14 +550,80 @@ function clipItem(c, privacy) {
   reviewing.set(c.name, item);
   return item;
 }
+// where the teaser at the start of the clip is cut from, and how long it is; the clip is remade with it
+function teaserControls(item, c) {
+  const p = c.parts, id = "c-" + c.name.replace(/\W/g, "-") + "-tz";
+  const from = el("input", {type: "range", id, min: 0, max: Math.max(0, p.main - 1).toFixed(1), step: 0.1, value: p.teaser_from});
+  const seconds = el("select", {ariaLabel: "Teaser length"},
+                     el("option", {value: "0"}, "no teaser"), ...[1.5, 2, 2.5, 3, 4, 5].map(v => el("option", {value: String(v)}, v + " s")));
+  seconds.value = [0, 1.5, 2, 2.5, 3, 4, 5].reduce((a, b) => Math.abs(b - p.teaser) < Math.abs(a - p.teaser) ? b : a).toString();
+  const shown = el("span", {});
+  const label = () => {
+    from.disabled = seconds.value === "0";
+    from.max = Math.max(0, p.main - Number(seconds.value || 1)).toFixed(1);
+    shown.textContent = seconds.value === "0" ? "" : `from ${Number(from.value).toFixed(1)} s (chat spiked at ${p.spike.toFixed(1)} s)`;
+  };
+  from.oninput = seconds.onchange = label;
+  label();
+  item.remake = el("button", {}, "Remake teaser");
+  item.remake.onclick = async () => {
+    item.remake.disabled = true;
+    try {
+      await api("/api/review/teaser", {name: c.name, start: Number(from.value), seconds: Number(seconds.value)});
+      item.look.replaceChildren(el("button", {onclick: () => watch(item, c.name)}, "Watch"));
+    } catch (error) { item.state.textContent = error.message; item.state.className = "state bad"; }
+    loadClips();
+  };
+  item.teaserParts = [from, seconds];
+  return el("div", {className: "teaser"}, el("label", {htmlFor: id}, "Teaser"), from, seconds, shown, item.remake);
+}
+// the thumbnail: the clip's frame at a moment picked on a slider, with big words on it
+function thumbControls(item, c) {
+  const p = c.parts, total = p ? p.teaser + p.intro + p.main + 3 : 40, id = "c-" + c.name.replace(/\W/g, "-") + "-th";
+  const at = el("input", {type: "range", id, min: 0, max: total.toFixed(1), step: 0.1,
+                          value: (p ? p.teaser + p.intro + p.spike : 3).toFixed(1)});
+  const words = el("input", {type: "text", ariaLabel: "Thumbnail words", maxLength: 60,
+                             value: c.title.split(" | ")[0].split(" ").slice(0, 5).join(" ")});
+  const when = el("span", {});
+  const show = () => { when.textContent = Number(at.value).toFixed(1) + " s"; };
+  at.oninput = show;
+  show();
+  item.picture = el("img", {className: "shot-thumb", alt: "Thumbnail of " + c.channel, hidden: true});
+  const loadPicture = async () => {
+    try {
+      const response = await fetch("/api/thumb?name=" + encodeURIComponent(c.name) + "&t=" + Date.now(), {headers: {"X-Token": token}});
+      if (!response.ok) return;
+      item.picture.src = URL.createObjectURL(await response.blob());
+      item.picture.hidden = false;
+    } catch (error) {}
+  };
+  if (c.thumb) loadPicture();
+  const make = el("button", {}, "Make thumbnail");
+  make.onclick = async () => {
+    make.disabled = true;
+    try {
+      await api("/api/review/thumbnail", {name: c.name, at: Number(at.value), text: words.value});
+      await loadPicture();
+      item.state.textContent = "Thumbnail ready; it is sent with the upload";
+      item.state.className = "state";
+    } catch (error) { item.state.textContent = error.message; item.state.className = "state bad"; }
+    make.disabled = false;
+  };
+  item.thumbParts = [at, words, make];
+  return el("div", {className: "teaser"}, el("label", {htmlFor: id}, "Thumbnail"), at, when, words, make, item.picture);
+}
 function paintClip(item, c) {
-  const busy = c.state === "uploading", done = c.state === "uploaded";
+  const busy = c.state === "uploading" || c.state === "editing", done = c.state === "uploaded";
+  for (const control of [...(item.thumbParts || []), item.tags]) control.disabled = busy || done;
+  for (const control of [...(item.teaserParts || []), ...(item.remake ? [item.remake] : [])]) control.disabled = busy || done;
+  if (item.teaserParts && !busy && !done) item.teaserParts[0].disabled = item.teaserParts[1].value === "0";
   item.root.classList.toggle("done", done);
   for (const control of [item.title, item.description, item.privacy, item.send]) control.disabled = busy || done;
   item.drop.disabled = busy;
   item.state.className = "state" + (c.state === "failed" ? " bad" : "");
   item.state.replaceChildren(
-    busy ? "Uploading"
+    c.state === "editing" ? "Remaking the teaser"
+    : busy ? "Uploading"
     : done ? el("a", {href: "https://youtube.com/shorts/" + c.id, target: "_blank", rel: "noopener"}, "Uploaded (" + c.privacy + ")")
     : c.state === "failed" ? "Upload failed: " + c.error
     : "Waiting for review");
@@ -559,6 +640,13 @@ async function watch(item, name) {
   }
 }
 $("review-refresh").onclick = loadClips;
+$("review-uploaded").onclick = () => act("/api/open-clips", {folder: "uploaded"});
+$("review-clear").onclick = async () => {
+  const waiting = [...reviewing.values()].filter(item => !item.root.classList.contains("done")).length;
+  if (!waiting || !confirm(`Delete all ${waiting} clips waiting for review? Uploaded clips are kept.`)) return;
+  await act("/api/review/clear", {});
+  loadClips();
+};
 
 // ---- the cam editor: where the streamer's cam is, and the clip's shape, for one stream ----
 

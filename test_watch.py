@@ -475,6 +475,12 @@ run_watch(counts(10, 10, 10, 10, 40), 15, kick=True)
 assert clips == [(watcher.KICK_LAG, 50)], "a Kick clip is told how late its chat was counted"
 
 
+# hashtags: filled in, cleaned, each once, #Shorts last, never a pile
+assert upload.hashtags(upload.HASHTAGS, "twitch.tv/ishowspeed") == "#ishowspeed #twitch #clips #Shorts"
+assert upload.hashtags("#chatwentoff #{channel} #GTA6 #gta-6", "kick.com/xqc") == "#chatwentoff #xqc #GTA6 #Shorts"
+assert upload.hashtags(" ".join(f"#t{i}" for i in range(40)), "twitch.tv/x").count("#") == 15
+
+
 # --- the clip: which moment it asks for, how it is cut and encoded, and that it always lets go ---
 class Holder:
     tag = "chan"
@@ -1156,8 +1162,9 @@ with tempfile.TemporaryDirectory() as folder:
 
     sent, real_publish = [], upload.publish
 
-    def fake_publish(clip, source, privacy, title, description, say=print):
-        sent.append((Path(clip).name, source, privacy, title, description))
+    def fake_publish(clip, source, privacy, title, description, say=print, tags="", thumbnail=None):
+        sent.append((Path(clip).name, source, privacy, title, description, tags, thumbnail and Path(thumbnail).name))
+        say("thumbnail set")
         return "abc123"
 
     upload.publish = fake_publish
@@ -1166,13 +1173,32 @@ with tempfile.TemporaryDirectory() as folder:
             body = {"name": "xqc_20261120_120000.mp4", "title": "t", "description": "", "privacy": "unlisted", **bad}
             assert ask("/api/review/upload", body)[0] == 400, bad
         assert sent == [], "nothing went out for a request that was refused"
+        # a thumbnail made from the clip goes out with it; the frame grab is stood in for
+        real_run = watcher.run
+        grabbed = []
+        watcher.run = lambda *c: grabbed.append([str(x) for x in c]) or Path(str(c[-1])).write_bytes(b"jpg") or ""
+        try:
+            assert ask("/api/review/thumbnail", {"name": "xqc_20261120_120000.mp4", "at": 21.5, "text": "no way he did that"})[0] == 200
+            assert ask("/api/review/thumbnail", {"name": "../gui.py", "at": 1, "text": "x"})[0] == 400
+        finally:
+            watcher.run = real_run
+        assert grabbed[0][grabbed[0].index("-ss") + 1] == "21.500" and "drawtext" in " ".join(grabbed[0])
+        assert ask("/api/thumb?name=xqc_20261120_120000.mp4") == (200, b"jpg")
         assert ask("/api/review/upload", {"name": "xqc_20261120_120000.mp4", "title": "{x} my title",
-                                          "description": "words", "privacy": "unlisted"})[0] == 200
+                                          "description": "words", "privacy": "unlisted",
+                                          "tags": "#xqc #gta6"})[0] == 200
         deadline = time.time() + 3
         while board.reviewed.get("xqc_20261120_120000.mp4", {}).get("state") != "uploaded":
             assert time.time() < deadline
             time.sleep(0.02)
-        assert sent == [("xqc_20261120_120000.mp4", "twitch.tv/xqc", "unlisted", "{{x}} my title", "words")], sent
+        assert sent == [("xqc_20261120_120000.mp4", "twitch.tv/xqc", "unlisted", "{{x}} my title", "words", "#xqc #gta6",
+                         "xqc_20261120_120000.jpg")], sent
+        kept = gui.CLIPS / "uploaded"
+        assert sorted(p.name for p in kept.iterdir()) == ["xqc_20261120_120000.jpg", "xqc_20261120_120000.mp4",
+                                                          "xqc_20261120_120000.srt"], "an uploaded clip is kept apart"
+        listed = {c["name"]: c for c in ask("/api/clips")[1]["clips"]}
+        assert listed["xqc_20261120_120000.mp4"]["state"] == "uploaded" and listed["xqc_20261120_120000.mp4"]["thumb"]
+        assert ask("/api/clip?name=xqc_20261120_120000.mp4") == (200, b"video one"), "it can still be watched"
         assert ask("/api/review/upload", {"name": "xqc_20261120_120000.mp4", "title": "t", "privacy": "private"})[0] == 400
         assert gui.Board().reviewed["xqc_20261120_120000.mp4"] == {"state": "uploaded", "privacy": "unlisted", "id": "abc123"}
 
@@ -1188,10 +1214,52 @@ with tempfile.TemporaryDirectory() as folder:
         assert "quotaExceeded" in ask("/api/clips")[1]["clips"][0]["error"] + ask("/api/clips")[1]["clips"][1].get("error", "")
     finally:
         upload.publish = real_publish
-    assert ask("/api/review/delete", {"name": "xqc_20261120_120000.mp4"})[0] == 200
-    assert not (gui.CLIPS / "xqc_20261120_120000.mp4").exists() and not (gui.CLIPS / "xqc_20261120_120000.srt").exists()
-    assert ask("/api/review/delete", {"name": "xqc_20261120_120000.mp4"})[0] == 400
+    # the teaser of a clip in review is cut again from the moment picked, or taken out
+    (gui.CLIPS / "dinah-kick_20261120_130000.json").write_text(json.dumps(
+        {"teaser": 2.5, "teaser_from": 19.5, "spike": 20.0, "main": 30.0, "intro": 1.2}), encoding="utf-8")
+    remade, real_run = [], watcher.run
+
+    def fake_ffmpeg(*command):
+        remade.append([str(c) for c in command])
+        Path(str(command[-1])).write_bytes(b"remade")
+        return ""
+
+    watcher.run = fake_ffmpeg
+    try:
+        assert {c["name"]: c["parts"] for c in ask("/api/clips")[1]["clips"]}["dinah-kick_20261120_130000.mp4"]["spike"] == 20.0
+        for bad in ({"start": 29.5, "seconds": 2}, {"start": 5, "seconds": 0.5}, {"start": -1, "seconds": 2},
+                    {"start": "x", "seconds": 2}):
+            assert ask("/api/review/teaser", {"name": "dinah-kick_20261120_130000.mp4", **bad})[0] == 400, bad
+        assert ask("/api/review/teaser", {"name": "xqc_20261120_120000.mp4", "start": 1, "seconds": 2})[0] == 400, \
+            "an uploaded clip is not remade"
+        assert ask("/api/review/teaser", {"name": "dinah-kick_20261120_130000.mp4", "start": 10, "seconds": 3})[0] == 200
+        deadline = time.time() + 3
+        while board.reviewed.get("dinah-kick_20261120_130000.mp4", {}).get("state") == "editing":
+            assert time.time() < deadline
+            time.sleep(0.02)
+        graph = remade[-1][remade[-1].index("-filter_complex") + 1]
+        assert "trim=start=13.700:duration=3.000" in graph and "trim=start=2.500," in graph, graph
+        assert (gui.CLIPS / "dinah-kick_20261120_130000.mp4").read_bytes() == b"remade"
+        assert json.loads((gui.CLIPS / "dinah-kick_20261120_130000.json").read_text())["teaser"] == 3.0
+        assert ask("/api/review/teaser", {"name": "dinah-kick_20261120_130000.mp4", "start": 0, "seconds": 0})[0] == 200
+        deadline = time.time() + 3
+        while board.reviewed.get("dinah-kick_20261120_130000.mp4", {}).get("state") == "editing":
+            assert time.time() < deadline
+            time.sleep(0.02)
+        graph = remade[-1][remade[-1].index("-filter_complex") + 1]
+        assert "concat" not in graph and "trim=start=3.000," in graph, "the 3 s teaser is taken out again"
+    finally:
+        watcher.run = real_run
+    assert ask("/api/review/delete", {"name": "dinah-kick_20261120_130000.mp4"})[0] == 200
+    assert not any(gui.CLIPS.glob("dinah-kick_20261120_130000.*")), "the clip and its files are gone"
+    assert ask("/api/review/delete", {"name": "dinah-kick_20261120_130000.mp4"})[0] == 400
+    assert ask("/api/review/delete", {"name": "xqc_20261120_120000.mp4"})[0] == 400, "an uploaded clip is not deleted here"
     assert ask("/api/review/delete", {"name": "../streams.json"})[0] == 400
+    # clearing out deletes what waits for review, never what was uploaded
+    (gui.CLIPS / "ohne_20261120_140000.mp4").write_bytes(b"x")
+    (gui.CLIPS / "ohne_20261120_140000.srt").write_text("x", encoding="utf-8")
+    assert ask("/api/review/clear", {})[0] == 200
+    assert not list(gui.CLIPS.glob("*.mp4")) and (gui.CLIPS / "uploaded" / "xqc_20261120_120000.mp4").exists()
 
     # a promo, intro, outro or logo picked on the page is copied into brand/
     real_here, gui.HERE = gui.HERE, Path(folder)
