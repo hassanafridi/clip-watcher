@@ -145,6 +145,26 @@ main { max-width: 1440px; margin: 0 auto; padding: 32px; display: grid; gap: 40p
   align-items: center; justify-content: center; overflow: hidden; }
 .clip .look video { width: 100%; height: 100%; object-fit: contain; background: #000; }
 .clip .look button { height: 32px; padding: 0 12px; }
+#editor { width: min(1280px, 96vw); max-width: none; height: min(960px, 94vh); max-height: none; padding: 0;
+  border: 1px solid var(--line-strong); border-radius: 12px; background: var(--card); color: var(--text); }
+#editor::backdrop { background: rgba(0, 0, 0, 0.7); }
+#editor .inside-editor { display: grid; grid-template-columns: auto minmax(320px, 1fr); gap: 24px; height: 100%; padding: 20px; box-sizing: border-box; }
+#editor video { height: calc(min(960px, 94vh) - 40px); max-width: 52vw; aspect-ratio: 9 / 16; background: #000; border-radius: 8px; }
+#editor .panel { overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding-right: 4px; }
+#editor .panel > * { flex: none; }
+#editor .panel h2 { margin: 0 0 8px; }
+#editor .panel label { color: var(--muted); font-size: 12px; line-height: 16px; margin-top: 12px; }
+#editor .panel textarea { min-height: 72px; padding: 8px 12px; background: var(--card); border: 1px solid var(--line-strong);
+  border-radius: 8px; font: inherit; color: inherit; resize: vertical; }
+#editor .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+#editor .row button, #editor .row select { height: 32px; padding: 0 12px; width: auto; }
+#editor .hint { color: var(--text-2); font-size: 13px; }
+#editor .big-thumb { width: 160px; aspect-ratio: 9 / 16; object-fit: cover; border-radius: 8px; border: 1px solid var(--line-strong); }
+#editor .close { position: absolute; top: 12px; right: 12px; }
+@media (max-width: 860px) {
+  #editor .inside-editor { grid-template-columns: minmax(0, 1fr); overflow-y: auto; }
+  #editor video { height: 60vh; max-width: 100%; justify-self: center; }
+}
 .clip .facts { color: var(--text-2); font-size: 13px; margin-bottom: 8px; }
 .clip .facts strong { color: var(--text); font-weight: 500; font-size: 14px; }
 .clip label { display: block; color: var(--muted); font-size: 12px; line-height: 16px; margin: 8px 0 4px; }
@@ -314,6 +334,7 @@ aside h2 { margin-bottom: 16px; }
     <div id="review"></div>
     <p class="empty" id="review-empty">No clips yet. Finished clips show up here.</p>
   </section>
+  <dialog id="editor" aria-label="Clip editor"></dialog>
   <section>
     <div class="head"><h2>Log</h2></div>
     <pre id="log" role="log" aria-live="polite" tabindex="0"></pre>
@@ -514,7 +535,7 @@ async function loadClips() {
 function clipItem(c, privacy) {
   const id = "c-" + c.name.replace(/\W/g, "-");
   const item = {
-    look: el("div", {className: "look"}, el("button", {onclick: () => watch(item, c.name)}, "Watch")),
+    look: el("div", {className: "look"}, el("button", {className: "go", onclick: () => openEditor(item, c)}, "Open")),
     title: el("input", {type: "text", id: id + "-t", maxLength: 100, value: c.title}),
     description: el("textarea", {id: id + "-d", value: c.description}),
     tags: el("input", {type: "text", id: id + "-h", value: c.tags}),
@@ -570,7 +591,7 @@ function teaserControls(item, c) {
     item.remake.disabled = true;
     try {
       await api("/api/review/teaser", {name: c.name, start: Number(from.value), seconds: Number(seconds.value)});
-      item.look.replaceChildren(el("button", {onclick: () => watch(item, c.name)}, "Watch"));
+      item.look.replaceChildren(el("button", {className: "go", onclick: () => openEditor(item, c)}, "Open"));
     } catch (error) { item.state.textContent = error.message; item.state.className = "state bad"; }
     loadClips();
   };
@@ -627,6 +648,102 @@ function paintClip(item, c) {
     : done ? el("a", {href: "https://youtube.com/shorts/" + c.id, target: "_blank", rel: "noopener"}, "Uploaded (" + c.privacy + ")")
     : c.state === "failed" ? "Upload failed: " + c.error
     : "Waiting for review");
+}
+// the clip editor: the clip large, with everything that can be done to it beside it
+async function openEditor(item, c) {
+  const dialog = $("editor"), p = c.parts, done = c.state === "uploaded";
+  const video = el("video", {controls: true, autoplay: true, playsInline: true});
+  const note = el("p", {className: "hint", ariaLive: "polite"});
+  const now = () => video.currentTime;
+  const field = (tag, props, from) => {
+    const node = el(tag, props);
+    node.value = from.value;
+    node.oninput = () => { from.value = node.value; };
+    node.disabled = done;
+    return node;
+  };
+  const title = field("input", {type: "text", id: "ed-title", maxLength: 100}, item.title);
+  const description = field("textarea", {id: "ed-description"}, item.description);
+  const tags = field("input", {type: "text", id: "ed-tags"}, item.tags);
+  const privacy = field("select", {id: "ed-privacy"}, item.privacy);
+  privacy.append(...["private", "unlisted", "public"].map(v => el("option", {value: v}, v)));
+  privacy.value = item.privacy.value;
+  const load = async keep => {
+    const response = await fetch("/api/clip?name=" + encodeURIComponent(c.name) + "&t=" + Date.now(), {headers: {"X-Token": token}});
+    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || response.statusText);
+    if (video.src) URL.revokeObjectURL(video.src);
+    video.src = URL.createObjectURL(await response.blob());
+    if (keep) video.currentTime = keep;
+  };
+  const busy = async (button, job) => {
+    button.disabled = true;
+    try { await job(); } catch (error) { note.textContent = error.message; }
+    button.disabled = done;
+  };
+  // the teaser: start it where the player is now
+  const offset = p ? p.teaser + p.intro : 0, length = el("select", {id: "ed-teaser"});
+  length.append(el("option", {value: "0"}, "no teaser"), ...[1.5, 2, 2.5, 3, 4, 5].map(v => el("option", {value: String(v)}, v + " s")));
+  length.value = p ? String([0, 1.5, 2, 2.5, 3, 4, 5].reduce((a, b) => Math.abs(b - p.teaser) < Math.abs(a - p.teaser) ? b : a)) : "2.5";
+  const teaserButton = el("button", {}, "Teaser from this moment");
+  teaserButton.disabled = done || !p;
+  teaserButton.onclick = () => busy(teaserButton, async () => {
+    const start = Math.max(0, Math.min(now() - offset, p.main - Number(length.value)));
+    await api("/api/review/teaser", {name: c.name, start, seconds: Number(length.value)});
+    note.textContent = "Remaking the clip with the new teaser";
+    for (let i = 0; i < 120; i++) {
+      await new Promise(r => setTimeout(r, 1000));
+      const fresh = (await api("/api/clips")).clips.find(x => x.name === c.name);
+      if (fresh && fresh.state !== "editing") { Object.assign(c, fresh); break; }
+    }
+    Object.assign(p, c.parts);
+    await load(0);
+    note.textContent = Number(length.value) ? "Done: the clip now opens with that moment" : "Done: the teaser is taken out";
+  });
+  // the thumbnail: the frame on screen now, with the words typed
+  const words = el("input", {type: "text", id: "ed-words", maxLength: 60, value: c.title.split(" | ")[0].split(" ").slice(0, 5).join(" ")});
+  const picture = el("img", {className: "big-thumb", alt: "Thumbnail", hidden: true});
+  const showPicture = async () => {
+    const response = await fetch("/api/thumb?name=" + encodeURIComponent(c.name) + "&t=" + Date.now(), {headers: {"X-Token": token}});
+    if (response.ok) { picture.src = URL.createObjectURL(await response.blob()); picture.hidden = false; }
+  };
+  const thumbButton = el("button", {}, "Thumbnail from this frame");
+  thumbButton.disabled = done;
+  thumbButton.onclick = () => busy(thumbButton, async () => {
+    video.pause();
+    await api("/api/review/thumbnail", {name: c.name, at: now(), text: words.value});
+    await showPicture();
+    if (item.picture) { item.picture.src = picture.src; item.picture.hidden = false; }
+    note.textContent = "Thumbnail ready; it goes out with the upload";
+  });
+  const send = el("button", {className: "go"}, "Upload"), drop = el("button", {}, "Delete");
+  send.disabled = drop.disabled = done;
+  send.onclick = () => busy(send, async () => {
+    await api("/api/review/upload", {name: c.name, title: title.value, description: description.value,
+                                      privacy: privacy.value, tags: tags.value});
+    dialog.close();
+  });
+  drop.onclick = async () => {
+    if (!confirm("Delete " + c.name + " for good?")) return;
+    await busy(drop, async () => { await api("/api/review/delete", {name: c.name}); dialog.close(); });
+  };
+  const close = el("button", {className: "close", ariaLabel: "Close the editor"}, "Close");
+  close.onclick = () => dialog.close();
+  dialog.replaceChildren(close, el("div", {className: "inside-editor"}, video, el("div", {className: "panel"},
+    el("h2", {}, c.channel + (done ? " - uploaded" : "")),
+    el("p", {className: "hint"}, "Play or scrub the clip, then use the buttons to take the moment on screen."),
+    el("label", {htmlFor: "ed-teaser"}, "Teaser at the start" + (p ? ` (chat spiked at ${(offset + p.spike).toFixed(1)} s)` : "")),
+    el("div", {className: "row"}, length, teaserButton),
+    el("label", {htmlFor: "ed-words"}, "Thumbnail words"),
+    el("div", {className: "row"}, words, thumbButton), picture,
+    el("label", {htmlFor: "ed-title"}, "Title"), title,
+    el("label", {htmlFor: "ed-description"}, "Description (the stream link is added)"), description,
+    el("label", {htmlFor: "ed-tags"}, "Hashtags"), tags,
+    el("label", {htmlFor: "ed-privacy"}, "Who can see it"),
+    el("div", {className: "row"}, privacy, send, drop), note)));
+  dialog.onclose = () => { video.pause(); if (video.src) URL.revokeObjectURL(video.src); loadClips(); };
+  dialog.showModal();
+  if (c.thumb) showPicture();
+  try { await load(p ? offset + p.spike - 1 : 0); } catch (error) { note.textContent = error.message; }
 }
 async function watch(item, name) {
   item.look.replaceChildren("Loading");
