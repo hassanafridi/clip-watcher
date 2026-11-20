@@ -620,30 +620,35 @@ class Board:
         words = " ".join(str(text or "").split()).upper()[:60]
         lines, line = [], ""
         for word in words.split():  # two or three short lines read best on a phone
-            if line and len(line) + 1 + len(word) > 14:
+            if line and len(line) + 1 + len(word) > 12:
                 lines.append(line)
                 line = word
             else:
                 line = f"{line} {word}".strip()
         lines += [line] if line else []
         draw = "scale=1080:1920,setsar=1"  # the words sit below the cam panel, so the face stays in view
-        if lines:
-            card = clip.with_suffix(".thumb.txt")
-            card.write_text("\n".join(lines), encoding="utf-8", newline="\n")  # a CR would draw as an extra line
-            size = min(150, round(1080 * 1.5 / max(len(x) for x in lines)))
-            bold = Path("C:/Windows/Fonts/arialbd.ttf")
-            face = f"fontfile={watcher.quote(bold)}" if bold.exists() else "font='DejaVu Sans:style=Bold'"
-            draw += (f",drawbox=x=0:y=700:w=iw:h={len(lines) * size * 1.25 + 80:.0f}:color=black@0.55:t=fill,"
-                     f"drawbox=x=0:y=700:w=24:h={len(lines) * size * 1.25 + 80:.0f}:color=0xe5484d:t=fill,"
-                     f"drawtext=textfile={watcher.quote(card)}:expansion=none:{face}:fontsize={size}:fontcolor=white:"
-                     f"line_spacing={size // 4}:borderw={max(3, size // 18)}:bordercolor=black:x=(w-text_w)/2:y=740")
+        cards = []
+        # the look of big YouTube thumbnails: a tall heavy face, yellow then white, a thick outline and a shadow
+        size = min(250, round(1080 * 1.9 / max([len(x) for x in lines] or [1])))
+        face = next((f"fontfile={watcher.quote(f)}" for f in (HERE / "fonts" / "Anton-Regular.ttf",
+                                                              Path("C:/Windows/Fonts/impact.ttf")) if f.exists()),
+                    "font='DejaVu Sans:style=Bold'")
+        for n, words_on_line in enumerate(lines):
+            card = clip.with_suffix(f".thumb{n}.txt")
+            card.write_text(words_on_line, encoding="utf-8")
+            cards.append(card)
+            draw += (f",drawtext=textfile={watcher.quote(card)}:expansion=none:{face}:fontsize={size}:"
+                     f"fontcolor={'0xFFD60A' if n == 0 else 'white'}:borderw={max(6, size // 11)}:bordercolor=black:"
+                     f"shadowcolor=black@0.7:shadowx={size // 22}:shadowy={size // 18}:"
+                     f"x=(w-text_w)/2:y={700 + n * round(size * 1.08)}")
         try:
             watcher.run("ffmpeg", "-nostdin", "-y", "-loglevel", "error", "-ss", f"{at:.3f}", "-i", clip,
                         "-frames:v", "1", "-vf", draw, "-q:v", "2", clip.with_suffix(".jpg"))
         except RuntimeError as e:
             return f"The thumbnail could not be made: {e}"
         finally:
-            clip.with_suffix(".thumb.txt").unlink(missing_ok=True)
+            for card in cards:
+                card.unlink(missing_ok=True)
 
     def clear(self):
         """Delete every clip still waiting for review; uploaded ones in clips/uploaded/ stay."""
