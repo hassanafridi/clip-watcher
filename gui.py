@@ -589,6 +589,8 @@ class Board:
             try:
                 said = []
                 picture = clip.with_suffix(".jpg")
+                if not picture.is_file():  # a clip made before default thumbnails still goes out with one
+                    self.first_thumbnail(name)
                 video = upload.publish(clip, clip_source(name)[1], privacy, title.translate(literal),
                                        description.translate(literal), say=said.append,
                                        tags=str(tags if tags is not None else self.setting("--hashtags", upload.HASHTAGS)),
@@ -618,15 +620,33 @@ class Board:
         keep_own: leave a thumbnail made by hand as it is.
         """
         clip = clip_path(name)
+        if not clip:
+            return
         try:
             parts = json.loads(clip.with_suffix(".json").read_text(encoding="utf-8"))
-        except (AttributeError, OSError, ValueError):
-            return  # made before clips said how they are put together
-        if keep_own and parts.get("own_thumbnail"):
+        except (OSError, ValueError):
+            parts = None
+        if parts and keep_own and parts.get("own_thumbnail"):
             return
-        at = 0.05 if parts.get("teaser") else parts.get("intro", 0) + parts.get("spike", 0)
+        if parts:
+            at = 0.05 if parts.get("teaser") else parts.get("intro", 0) + parts.get("spike", 0)
+        else:  # an older clip does not say where its moments are: two thirds in is about where chat spiked
+            try:
+                at = 0.62 * float(watcher.run("ffprobe", "-v", "error", "-show_entries", "format=duration", "-of",
+                                              "csv=p=0", clip).split()[-1])
+            except (RuntimeError, ValueError, IndexError):
+                return
         said = " ".join(upload.transcript(clip.with_suffix(".srt")).split()[:5])
         self.thumbnail(name, at, said, own=False)
+
+    def backfill_thumbnails(self):
+        """Give the clips on the list that have no thumbnail yet their default one; run once in the background."""
+        for folder, n in (("", 60), ("uploaded", 20)):
+            where = CLIPS / folder if folder else CLIPS
+            files = sorted(where.glob("*.mp4"), key=lambda f: f.stat().st_mtime, reverse=True)[:n] if where.is_dir() else []
+            for clip in files:
+                if CLIP_NAME.fullmatch(clip.name) and not clip.with_suffix(".jpg").exists():
+                    self.first_thumbnail(clip.name)
 
     def thumbnail(self, name, at, text, own=True):
         """Make the clip's thumbnail: its frame at `at` seconds, with big words on it, as <clip>.jpg.
@@ -1048,6 +1068,7 @@ def main():
         if not args.no_browser:
             webbrowser.open(url)
         return
+    threading.Thread(target=httpd.board.backfill_thumbnails, daemon=True).start()
     print(f"clip-watcher streams board: {url}\nKeep this window open. Ctrl+C quits.", flush=True)
     if key:
         links = [f"http://{a}:{args.port}/?key={key}" for a in lan_addresses()]

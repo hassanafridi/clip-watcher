@@ -1222,6 +1222,40 @@ with tempfile.TemporaryDirectory() as folder:
         assert gui.Board().reviewed["xqc_20261120_120000.mp4"] == {"state": "uploaded", "privacy": "unlisted", "id": "abc123",
                                                                    "thumbnail": "thumbnail set"}
 
+        # a clip made before default thumbnails still goes out with one, made at upload from two thirds in
+        (gui.CLIPS / "old_20261120_150000.mp4").write_bytes(b"old")
+        real_run, grabs = watcher.run, []
+
+        def fake_grab(*c):
+            c = [str(x) for x in c]
+            if c[0] == "ffprobe":
+                return "30.0\n"
+            grabs.append(c)
+            Path(c[-1]).write_bytes(b"jpg")
+            return ""
+
+        watcher.run = fake_grab
+        try:
+            assert ask("/api/review/upload", {"name": "old_20261120_150000.mp4", "title": "t", "privacy": "private"})[0] == 200
+            deadline = time.time() + 3
+            while board.reviewed.get("old_20261120_150000.mp4", {}).get("state") != "uploaded":
+                assert time.time() < deadline
+                time.sleep(0.02)
+            assert sent[-1][0] == "old_20261120_150000.mp4" and sent[-1][-1] == "old_20261120_150000.jpg", sent[-1]
+            assert grabs[0][grabs[0].index("-ss") + 1] == "18.600", "two thirds into a 30 s clip"
+            # at start the clips on the list that lack a thumbnail get theirs
+            for name in ("late_20261120_160000.mp4", "later_20261120_170000.mp4"):
+                (gui.CLIPS / name).write_bytes(b"x")
+            (gui.CLIPS / "later_20261120_170000.jpg").write_bytes(b"mine")
+            board.backfill_thumbnails()
+            assert (gui.CLIPS / "late_20261120_160000.jpg").read_bytes() == b"jpg"
+            assert (gui.CLIPS / "later_20261120_170000.jpg").read_bytes() == b"mine", "an existing thumbnail is left alone"
+        finally:
+            watcher.run = real_run
+            for name in ("late_20261120_160000", "later_20261120_170000"):
+                for ext in (".mp4", ".jpg"):
+                    (gui.CLIPS / (name + ext)).unlink(missing_ok=True)
+
         def refuse(*args, **kw):
             raise RuntimeError("YouTube refused the upload: 403 quotaExceeded")
 
