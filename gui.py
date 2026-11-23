@@ -76,7 +76,7 @@ LIMIT = 16  # streams on the board at most
 # a row carries its own minimum, multiplier and site; in the shared settings these only preset new rows
 PER_STREAM = ("--min", "--factor", "--kick")
 # YouTube drops a thumbnail set while it is still processing a Short; it is sent again after these many seconds
-RESEND = (150, 900)
+RESEND = (600,)
 ON_THE_PAGE = ("--category", "--top", "--cam-box", "--game-box", "--cam-share", "--profile")  # their own screens
 # a channel profile: its own name, tag, intro and so on, and its own YouTube sign-in, in profiles/<id>/
 PROFILE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
