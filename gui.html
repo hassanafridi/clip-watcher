@@ -161,6 +161,27 @@ main { max-width: 1440px; margin: 0 auto; padding: 32px; display: grid; gap: 40p
 #editor .hint { color: var(--text-2); font-size: 13px; }
 #editor .big-thumb { width: 160px; aspect-ratio: 9 / 16; object-fit: cover; border-radius: 8px; border: 1px solid var(--line-strong); }
 #editor .close { position: absolute; top: 12px; right: 12px; }
+.chan { height: 24px; margin-top: 4px; padding: 0 6px; font-size: 12px; max-width: 200px; }
+.channel { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(200px, 1.4fr) auto; gap: 8px 16px; align-items: center;
+  padding: 12px 0; border-top: 1px solid var(--line); }
+.channel .state { color: var(--text-2); font-size: 13px; }
+.channel .state.bad { color: var(--tally); }
+.channel .acts button { height: 32px; padding: 0 12px; }
+#channel-dialog { width: min(760px, 96vw); max-width: none; max-height: 94vh; padding: 0; border: 1px solid var(--line-strong);
+  border-radius: 12px; background: var(--card); color: var(--text); }
+#channel-dialog::backdrop { background: rgba(0, 0, 0, 0.7); }
+#channel-dialog .panel { padding: 20px; display: flex; flex-direction: column; gap: 4px; }
+#channel-dialog h2 { margin: 0 0 8px; }
+#channel-dialog h3 { margin: 16px 0 4px; font: 500 16px/20px var(--display); }
+#channel-dialog .fieldline { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+#channel-dialog .fieldline label { color: var(--muted); font-size: 12px; line-height: 16px; }
+#channel-dialog .fieldline input[type="color"] { width: 64px; height: 36px; padding: 2px; }
+#channel-dialog .colors { display: flex; flex-wrap: wrap; gap: 8px 24px; }
+#channel-dialog .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+#channel-dialog .row button, #channel-dialog .fieldline button { height: 32px; padding: 0 12px; width: auto; }
+#channel-dialog .hint { margin: 0; color: var(--text-2); font-size: 13px; }
+#channel-dialog .close { position: absolute; top: 12px; right: 12px; }
+@media (max-width: 860px) { .channel { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 860px) {
   #editor .inside-editor { grid-template-columns: minmax(0, 1fr); overflow-y: auto; }
   #editor video { height: 60vh; max-width: 100%; justify-self: center; }
@@ -321,6 +342,15 @@ aside h2 { margin-bottom: 16px; }
     <div class="streams" id="streams"></div>
     <p class="empty" id="empty">No streams yet. Add a channel in the bar above. Every stream gets its own row with its own minimum, its own start and stop, and its chat counted live.</p>
   </section>
+  <section>
+    <div class="head">
+      <h2>Channels</h2>
+      <div class="tools"><button id="channel-new" class="go">New channel</button></div>
+    </div>
+    <p class="help">A channel is a look and a YouTube account: its name and handle, intro and outro, hashtags and thumbnail colours, and its own Google sign-in. Each stream posts to the channel picked on its row. A stream on the default channel uses the settings below and the Google account in token.json.</p>
+    <div id="channel-list"></div>
+  </section>
+  <dialog id="channel-dialog" aria-label="Channel"></dialog>
   <section>
     <div class="head">
       <h2>Clips to review</h2>
@@ -793,6 +823,172 @@ $("review-clear").onclick = async () => {
   loadClips();
 };
 
+// ---- channels: a look and a YouTube account, picked per stream ----
+
+let channels = [], defaultChannel = {};
+const PRIVACY = [["", "Same as the settings"], ["private", "Private"], ["unlisted", "Unlisted"], ["public", "Public"]];
+const COLOR_FIELDS = [["ink", "Background"], ["light", "Big words"], ["accent", "Accent"], ["second", "Handle"]];
+async function loadChannels() {
+  try {
+    const data = await api("/api/channels");
+    channels = data.channels;
+    defaultChannel = data.default;
+  } catch (error) { return; }
+  paintChannels();
+  for (const r of rows.values()) fillChannel(r);
+  if (channels.some(c => c.signing_in) || defaultChannel.signing_in) setTimeout(loadChannels, 2000);
+}
+// the channel picker on a stream's row
+function fillChannel(r) {
+  const current = r.data ? r.data.profile : "";
+  const choices = [["", "Default channel"], ...channels.map(c => [c.id, c.name])];
+  if (current && !channels.some(c => c.id === current)) choices.push([current, current + " (missing)"]);
+  r.channel.replaceChildren(...choices.map(option));
+  r.channel.value = current;
+}
+function paintChannels() {
+  const status = c => c.signing_in ? "Waiting for the sign-in in the browser on this computer"
+    : c.problem ? "Sign-in problem: " + c.problem : c.signed_in ? "YouTube: signed in" : "YouTube: not signed in";
+  const signIn = (id, c) => {
+    const button = el("button", {}, c.signed_in ? "Sign in again" : "Sign in to YouTube");
+    button.disabled = c.signing_in;
+    button.onclick = async () => {
+      try { await api("/api/channel/signin", {id}); } catch (error) { $("notice").textContent = error.message; }
+      loadChannels();
+    };
+    return button;
+  };
+  const card = (name, sub, c, ...buttons) => el("div", {className: "channel"},
+    el("div", {}, el("div", {className: "name"}, name), el("div", {className: "sub"}, sub)),
+    el("div", {className: "state" + (c.problem ? " bad" : "")}, status(c)),
+    el("div", {className: "acts"}, ...buttons));
+  const items = [card("Default channel", "the settings below and the Google account in token.json", defaultChannel, signIn("", defaultChannel))];
+  for (const c of channels) {
+    const edit = el("button", {}, "Edit"), drop = el("button", {}, "Delete");
+    edit.onclick = () => openChannel(c.id);
+    drop.onclick = async () => {
+      if (!confirm(`Delete the channel ${c.name}, with its sign-in and files?`)) return;
+      try { await api("/api/channel/delete", {id: c.id}); } catch (error) { $("notice").textContent = error.message; }
+      loadChannels();
+    };
+    items.push(card(c.name, c.settings["--tag"] || "", c, edit, signIn(c.id, c), drop));
+  }
+  $("channel-list").replaceChildren(...items);
+}
+// the channel form: name and colours, the words, the files, and the Google project
+function openChannel(id) {
+  const c = channels.find(x => x.id === id), dialog = $("channel-dialog"), mine = c ? c.settings : {};
+  const state = {id: c ? c.id : ""};
+  const text = (name, value, props = {}) => el("input", {type: "text", id: "ch-" + name, value: value || "", autocomplete: "off",
+                                                          spellcheck: false, ...props});
+  const note = el("p", {className: "hint", ariaLive: "polite"});
+  const name = text("name", c && c.name, {maxLength: 60, placeholder: "My Channel"});
+  const handle = text("--tag", mine["--tag"], {placeholder: "@mychannel"});
+  const colors = Object.fromEntries(COLOR_FIELDS.map(([key]) => [key, el("input", {type: "color", id: "ch-" + key,
+    value: (c ? c.colors : {ink: "#141415", light: "#EDEDED", accent: "#E5484D", second: "#4FB3C6"})[key].toLowerCase()})]));
+  const words = Object.fromEntries([["--hashtags", "#{channel} #{game} #{site} #clips"], ["--title", "{text} | {channel}"],
+    ["--description", "{text}"], ["--credit", "{source}"], ["--teaser", "2.5"], ["--zoom", "0.12"]]
+    .map(([flag, hint]) => [flag, text(flag, mine[flag], {placeholder: hint + "  (blank: as in the settings)"})]));
+  const privacy = el("select", {id: "ch---privacy"}, ...PRIVACY.map(option));
+  privacy.value = mine["--privacy"] || "";
+  const files = Object.fromEntries(["--intro", "--outro", "--logo"].map(flag => [flag, text(flag, mine[flag])]));
+  const tagline = text("tagline", "", {placeholder: "the best moments", maxLength: 60});
+  const choose = (kind, label, accept, done) => {
+    const picker = el("input", {type: "file", hidden: true, accept}), button = el("button", {type: "button"}, label);
+    button.onclick = () => {
+      if (!state.id) { note.textContent = "Save the channel first, then add files to it."; return; }
+      picker.click();
+    };
+    picker.onchange = async () => {
+      const chosen = picker.files[0];
+      picker.value = "";
+      if (!chosen) return;
+      button.disabled = true;
+      try {
+        const response = await fetch(`/api/media?kind=${kind}&profile=${state.id}&name=${encodeURIComponent(chosen.name)}`,
+                                     {method: "POST", headers: {"X-Token": token}, body: chosen});
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || response.statusText);
+        done(data.path);
+        note.textContent = chosen.name + " is kept for this channel. Save to use it.";
+      } catch (error) { note.textContent = error.message; }
+      button.disabled = false;
+    };
+    return el("span", {}, button, picker);
+  };
+  const body = () => {
+    const settings = {"--tag": handle.value, "--privacy": privacy.value};
+    for (const [flag, input] of [...Object.entries(words), ...Object.entries(files)]) settings[flag] = input.value;
+    return {id: state.id, name: name.value, settings, colors: Object.fromEntries(Object.entries(colors).map(([k, i]) => [k, i.value]))};
+  };
+  const save = async () => {
+    const data = await api("/api/channel/save", body());
+    state.id = data.id;
+    await loadChannels();
+    return data;
+  };
+  const saveButton = el("button", {className: "go"}, "Save"), draw = el("button", {}, "Draw intro, outro, picture and banner");
+  const close = el("button", {className: "close", ariaLabel: "Close"}, "Close");
+  saveButton.onclick = async () => {
+    try { await save(); note.textContent = "Saved."; } catch (error) { note.textContent = error.message; }
+  };
+  draw.onclick = async () => {
+    draw.disabled = true;
+    note.textContent = "Drawing; this takes a few seconds";
+    try {
+      await save();
+      await api("/api/channel/brand", {id: state.id, tagline: tagline.value});
+      await loadChannels();
+      const fresh = channels.find(x => x.id === state.id);
+      files["--intro"].value = fresh.settings["--intro"] || "";
+      files["--outro"].value = fresh.settings["--outro"] || "";
+      note.textContent = "Done. Intro and outro are set for this channel. Upload the picture and the banner in YouTube Studio under Customization, Branding.";
+      downloads.replaceChildren(...downloadLinks());
+    } catch (error) { note.textContent = error.message; }
+    draw.disabled = false;
+  };
+  const downloadLinks = () => {
+    const fresh = channels.find(x => x.id === state.id);
+    return ["avatar.png", "banner.png"].filter(f => fresh && fresh.files[f]).map(f => {
+      const link = el("button", {type: "button"}, "Download " + (f === "avatar.png" ? "profile picture" : "banner"));
+      link.onclick = async () => {
+        const response = await fetch(`/api/channel-file?id=${state.id}&name=${f}`, {headers: {"X-Token": token}});
+        if (!response.ok) return;
+        const anchor = el("a", {download: f, href: URL.createObjectURL(await response.blob())});
+        anchor.click();
+        URL.revokeObjectURL(anchor.href);
+      };
+      return link;
+    });
+  };
+  const downloads = el("div", {className: "row"}, ...downloadLinks());
+  const labelled = (label, ...controls) => el("div", {className: "fieldline"}, el("label", {htmlFor: controls[0].id}, label), ...controls);
+  const row = (label, input, ...more) => labelled(label, input, ...more);
+  close.onclick = () => dialog.close();
+  dialog.replaceChildren(close, el("div", {className: "panel"},
+    el("h2", {}, c ? "Channel: " + c.name : "New channel"),
+    row("Channel name", name), row("Handle, shown in a corner of every clip", handle),
+    el("div", {className: "colors"}, ...COLOR_FIELDS.map(([key, label]) => labelled(label, colors[key]))),
+    el("h3", {}, "Words and uploads"),
+    row("Hashtags", words["--hashtags"]), row("Title template", words["--title"]), row("Description template", words["--description"]),
+    row("Streamer credit on screen", words["--credit"]), row("Teaser seconds", words["--teaser"]), row("Zoom at the spike", words["--zoom"]),
+    row("Who can see uploads", privacy),
+    el("h3", {}, "Files"),
+    row("Intro video", files["--intro"], choose("intro", "Choose file", "video/*", p => { files["--intro"].value = p; })),
+    row("Outro video", files["--outro"], choose("outro", "Choose file", "video/*", p => { files["--outro"].value = p; })),
+    row("Logo image", files["--logo"], choose("logo", "Choose file", "image/*", p => { files["--logo"].value = p; })),
+    el("div", {className: "row"}, draw, tagline), downloads,
+    el("h3", {}, "YouTube"),
+    el("p", {className: "hint"}, "Sign in on the Channels list with the Google account that owns this channel. By default the app in client_secret.json is used; " +
+      "to use your own Google project, add its client_secret.json here (a Desktop app, from Google Cloud Console)."),
+    el("div", {className: "row"}, choose("client", "Choose client_secret.json", ".json,application/json", () => {})),
+    el("div", {className: "row"}, saveButton), note));
+  dialog.onclose = loadChannels;
+  dialog.showModal();
+  name.focus();
+}
+$("channel-new").onclick = () => openChannel("");
+
 // ---- the cam editor: where the streamer's cam is, and the clip's shape, for one stream ----
 
 let shaper = null;
@@ -1075,6 +1271,8 @@ function addRow(stream) {
     msgs, median, threshold, min: min.input, factor: factor.input,
     chart: el("div", {className: "chart", role: "img"}), made: el("div", {className: "made"}),
     toggle: el("button", {}), remove: el("button", {}, "Remove"),
+    channel: el("select", {className: "chan", ariaLabel: "Channel for " + stream.channel,
+                           title: "The channel this stream's clips are made for; it applies from the next start"}),
     shape: el("button", {title: "Set where the streamer's cam is and the shape of this stream's clips"}, "Cam & shape"),
   };
   // a stream that is already stopping can be told to quit at once. That is the only request that drops clips,
@@ -1083,8 +1281,9 @@ function addRow(stream) {
     : !r.stopping ? act("/api/stop", {id: stream.id})
     : confirm(`Quit ${stream.channel} now? The clips it is still finishing are dropped.`) && act("/api/stop", {id: stream.id, force: true});
   r.remove.onclick = () => act("/api/remove", {id: stream.id});
+  r.channel.onchange = () => act("/api/stream-channel", {id: stream.id, profile: r.channel.value});
   r.root = el("div", {className: "stream"},
-    el("div", {className: "who"}, r.lamp, el("div", {}, el("div", {className: "name"}, stream.channel), r.sub)),
+    el("div", {className: "who"}, r.lamp, el("div", {}, el("div", {className: "name"}, stream.channel), r.sub, r.channel)),
     el("div", {className: "figures"}, msgs.node, median.node, threshold.node),
     r.chart,
     el("div", {className: "tune"}, min.node, factor.node),
@@ -1144,6 +1343,7 @@ function paint(r, s) {
   r.toggle.title = s.stopping ? "Quit this stream at once and drop the clips it is still finishing" : "";
   r.remove.disabled = s.running;
   r.data = s;
+  if (!r.channel.options.length || r.channel.value !== s.profile && document.activeElement !== r.channel) fillChannel(r);
   r.shape.textContent = LOOK_KEYS.some(key => s[key]) ? "Cam & shape *" : "Cam & shape";
 }
 
@@ -1331,6 +1531,7 @@ if (location.protocol === "file:") {
     poll();
     loadCategories();
     loadClips();
+    loadChannels();
     setInterval(loadClips, 15000);
   }).catch(error => offline("This page lost its connection", error.message));
 }

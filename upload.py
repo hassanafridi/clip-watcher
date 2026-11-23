@@ -61,24 +61,45 @@ def hashtags(template, source, game=""):
     return " ".join(tags[:15])
 
 
-def youtube():
-    """Authorized HTTP session; the first call opens a browser for consent and saves token.json."""
-    from google.auth.transport.requests import AuthorizedSession
-    from google.oauth2.credentials import Credentials
+def profile_dir(profile=""):
+    """Where a channel keeps its YouTube sign-in: its own folder, or this one for the default channel."""
+    return HERE / "profiles" / profile if profile else HERE
+
+
+def signed_in(profile=""):
+    return (profile_dir(profile) / "token.json").exists()
+
+
+def sign_in(profile="", wait=300):
+    """Open the browser once for the channel's Google account and keep the login in its token.json.
+
+    A channel uses its own client_secret.json when it has one, else the one in this folder.
+    """
     from google_auth_oauthlib.flow import InstalledAppFlow
 
-    token, secret = HERE / "token.json", HERE / "client_secret.json"
+    folder = profile_dir(profile)
+    secret = next((p for p in (folder / "client_secret.json", HERE / "client_secret.json") if p.exists()), None)
+    if not secret:
+        sys.exit("client_secret.json not found; see README, YouTube setup")
+    creds = InstalledAppFlow.from_client_secrets_file(str(secret), SCOPES).run_local_server(port=0, timeout_seconds=wait)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "token.json").write_text(creds.to_json())
+    return creds
+
+
+def youtube(profile=""):
+    """Authorized HTTP session for a channel; the first call opens a browser for consent."""
+    from google.auth.transport.requests import AuthorizedSession
+    from google.oauth2.credentials import Credentials
+
+    token = profile_dir(profile) / "token.json"
     if token.exists():
         return AuthorizedSession(Credentials.from_authorized_user_file(str(token), SCOPES))
-    if not secret.exists():
-        sys.exit("client_secret.json not found next to upload.py; see README, YouTube setup")
-    creds = InstalledAppFlow.from_client_secrets_file(str(secret), SCOPES).run_local_server(port=0)
-    token.write_text(creds.to_json())
-    return AuthorizedSession(creds)
+    return AuthorizedSession(sign_in(profile))
 
 
 def publish(clip, source, privacy="private", title=TITLE, description=DESCRIPTION, say=print, tags=HASHTAGS,
-            thumbnail=None, game=""):
+            thumbnail=None, game="", profile=""):
     """Upload clip (an .mp4 with an .srt beside it) and return the YouTube video id.
 
     thumbnail: an image to set as the video's thumbnail afterwards; YouTube may not use it on a Short.
@@ -93,7 +114,7 @@ def publish(clip, source, privacy="private", title=TITLE, description=DESCRIPTIO
         },
         "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False},
     }
-    http = youtube()
+    http = youtube(profile)
     start = http.post(UPLOAD_URL, json=body, headers={"X-Upload-Content-Type": "video/mp4"})
     if not start.ok:
         raise RuntimeError(f"YouTube refused the upload: {start.status_code} {start.text[:300]}")
@@ -109,9 +130,9 @@ def publish(clip, source, privacy="private", title=TITLE, description=DESCRIPTIO
     return video
 
 
-def set_thumbnail(video, picture, http=None):
+def set_thumbnail(video, picture, http=None, profile=""):
     """Give an uploaded video its thumbnail. Returns "thumbnail set", or why not in plain words."""
-    answer = (http or youtube()).post(THUMB_URL, params={"videoId": video}, data=Path(picture).read_bytes(),
+    answer = (http or youtube(profile)).post(THUMB_URL, params={"videoId": video}, data=Path(picture).read_bytes(),
                                       headers={"Content-Type": "image/jpeg"})
     if answer.ok:
         return "thumbnail set"

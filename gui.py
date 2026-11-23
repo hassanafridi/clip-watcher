@@ -5,6 +5,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import socket
 import subprocess
 import sys
@@ -15,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs
 
+import brand
 import live
 import upload
 import watcher
@@ -24,6 +26,40 @@ PAGE = HERE / "gui.html"
 SAVED = HERE / "streams.json"
 CLIPS = HERE / "clips"  # where watcher.py saves clips; clips.json there remembers what was reviewed
 CLIP_NAME = re.compile(r"[A-Za-z0-9_-]{1,80}\.mp4")
+
+
+def read_profile(pid):
+    """A channel profile as saved, or None when there is none by that id."""
+    if not PROFILE_ID.fullmatch(str(pid or "")):
+        return None
+    try:
+        data = json.loads((HERE / "profiles" / pid / "profile.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def profile_settings(pid):
+    """A channel's options as {flag: value}; nothing for the default channel."""
+    settings = (read_profile(pid) or {}).get("settings")
+    return {k: str(v) for k, v in settings.items() if k in PROFILE_FLAGS and str(v) != ""} if isinstance(settings, dict) else {}
+
+
+def clip_profile(clip):
+    """The channel a clip was made for ("" for the default one), from the clip's layout file."""
+    try:
+        pid = json.loads(clip.with_suffix(".json").read_text(encoding="utf-8")).get("profile") or ""
+    except (OSError, ValueError, AttributeError):
+        return ""
+    return pid if read_profile(pid) else ""
+
+
+def thumb_colors(pid):
+    """The colours of a channel's thumbnails as ffmpeg wants them: the first line, the other lines, the outline."""
+    saved = (read_profile(pid) or {}).get("colors") or {}
+    mix = {**brand.COLORS, **{k: v for k, v in saved.items() if k in brand.COLORS}}
+    return {"accent": brand.hexcolor(mix["accent"], brand.COLORS["accent"]), "light": brand.hexcolor(mix["light"], brand.COLORS["light"]),
+            "ink": brand.hexcolor(mix["ink"], brand.COLORS["ink"])}
 
 
 def clip_path(name):
@@ -37,7 +73,12 @@ HISTORY = 60  # chat counts kept per stream for its chart
 LIMIT = 16  # streams on the board at most
 # a row carries its own minimum, multiplier and site; in the shared settings these only preset new rows
 PER_STREAM = ("--min", "--factor", "--kick")
-ON_THE_PAGE = ("--category", "--top", "--cam-box", "--game-box", "--cam-share")  # finder and cam editor
+ON_THE_PAGE = ("--category", "--top", "--cam-box", "--game-box", "--cam-share", "--profile")  # their own screens
+# a channel profile: its own name, tag, intro and so on, and its own YouTube sign-in, in profiles/<id>/
+PROFILE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
+PROFILE_FLAGS = ("--tag", "--credit", "--logo", "--intro", "--outro", "--hashtags", "--title", "--description",
+                 "--privacy", "--hook", "--hook-secs", "--teaser", "--zoom", "--captions", "--chat-box")
+PROFILE_FILES = ("avatar.png", "banner.png", "intro.mp4", "outro.mp4")
 # the two lines of watcher.py the board reads; the first feeds the row's numbers and is kept out of the log
 STAT = re.compile(r"\[[^\]]+\] (\d+)s \| Msgs: (\d+) \| "
                   r"(?:(warming up|chat not counted)|Median: ([\d.]+) \| Threshold: (\d+)) \| (recording|no video)$")
@@ -246,6 +287,7 @@ class Stream:
         self.proc, self.stopping, self.forced, self.exit = None, False, False, None
         self.stats, self.history, self.clips, self.last = None, [], 0, ""
         self.look = dict.fromkeys(LOOK)  # set by hand in the cam editor; None means follow the settings
+        self.profile = ""  # the channel its clips are made for; "" is the default one
         self.frame, self.frames = None, 0  # newest still from watcher.py, and how many answers came
 
     def public(self):
@@ -253,7 +295,7 @@ class Stream:
             "id": self.id, "channel": self.channel, "kick": self.kick, "min": self.min, "factor": self.factor,
             "running": self.proc is not None, "stopping": self.stopping, "exit": self.exit,
             "stats": self.stats, "history": self.history, "clips": self.clips, "last": self.last,
-            **self.look,
+            **self.look, "profile": self.profile,
         }
 
     def tell(self, line):
@@ -273,6 +315,7 @@ class Board:
         self.lock = threading.Lock()
         self.streams, self.shared, self.lines, self.first = {}, [], [], 0
         self.topped = {}  # site -> (when asked, its most watched categories)
+        self.signing, self.sign_problems = set(), {}  # channels with a Google sign-in open, and why one failed
         try:
             self.reviewed = json.loads((CLIPS / "clips.json").read_text(encoding="utf-8"))
             assert isinstance(self.reviewed, dict)
@@ -290,12 +333,14 @@ class Board:
             try:  # one damaged row must not cost the rows after it
                 if not self.add(f"{'kick.com' if row['kick'] else 'twitch.tv'}/{row['channel']}", row["min"],
                                 row["factor"], keep=False):
-                    list(self.streams.values())[-1].look = shape_values(row)
+                    stream = list(self.streams.values())[-1]
+                    stream.look = shape_values(row)
+                    stream.profile = str(row.get("profile") or "")
             except (KeyError, TypeError, ValueError, AttributeError):
                 pass
 
     def save(self):
-        streams = [{"channel": s.channel, "kick": s.kick, "min": s.min, "factor": s.factor, **s.look}
+        streams = [{"channel": s.channel, "kick": s.kick, "min": s.min, "factor": s.factor, **s.look, "profile": s.profile}
                    for s in self.streams.values()]
         fresh = SAVED.with_name(SAVED.name + ".tmp")
         try:  # written beside the file and swapped in, so a kill half way never leaves a broken board
@@ -380,7 +425,12 @@ class Board:
             own += [f"--cam={look['mode']}"] if look["mode"] else []
             own += [f"--cam-corner={look['corner']}"] if look["corner"] else []
             own += [f"--cam-size={look['size']:g}"] if look["size"] else []
-            mine = {a.partition("=")[0] for a in own}  # what this stream sets itself wins over the shared settings
+            if stream.profile:
+                if not read_profile(stream.profile):
+                    return f"The channel '{stream.profile}' is gone; pick another one for this stream"
+                own.append(f"--profile={stream.profile}")
+            # what this stream or its channel sets wins over the shared settings
+            mine = {a.partition("=")[0] for a in own} | set(profile_settings(stream.profile))
             stream.proc = subprocess.Popen(
                 [sys.executable, "-u", str(HERE / "watcher.py"), "--stdin-control", link, *own,
                  *(a for a in self.shared if a.partition("=")[0] not in {*PER_STREAM, *mine} and a != "--upload")],
@@ -542,8 +592,10 @@ class Board:
                 stream.tell(f"min={minimum}")
                 stream.tell(f"factor={factor:g}")
 
-    def setting(self, flag, default):
-        return next((a.partition("=")[2] for a in self.shared if a.startswith(flag + "=")), default)
+    def setting(self, flag, default, profile=""):
+        """A setting: the channel's own, else the shared one, else the default."""
+        return profile_settings(profile).get(flag) or next(
+            (a.partition("=")[2] for a in self.shared if a.startswith(flag + "=")), default)
 
     def clips(self):
         """Clips on disk with what reviewing needs: the suggested title and description, and their state."""
@@ -558,10 +610,11 @@ class Board:
             if not CLIP_NAME.fullmatch(clip.name):
                 continue
             channel, source = clip_source(clip.name)
+            profile = clip_profile(clip)
             try:
                 title, description = upload.describe(upload.transcript(clip.with_suffix(".srt")), channel,
-                                                     self.setting("--title", upload.TITLE),
-                                                     self.setting("--description", upload.DESCRIPTION))
+                                                     self.setting("--title", upload.TITLE, profile),
+                                                     self.setting("--description", upload.DESCRIPTION, profile))
             except (KeyError, IndexError, ValueError):
                 title, description = upload.describe(upload.transcript(clip.with_suffix(".srt")), channel)
             try:
@@ -570,8 +623,9 @@ class Board:
                 layout_of = None  # made before clips said how they are put together: no teaser choice
             out.append({"name": clip.name, "channel": channel, "source": source, "made": int(clip.stat().st_mtime),
                         "parts": layout_of, "thumb": clip.with_suffix(".jpg").is_file(),
-                        "tags": upload.hashtags(self.setting("--hashtags", upload.HASHTAGS), source,
+                        "tags": upload.hashtags(self.setting("--hashtags", upload.HASHTAGS, profile), source,
                                                 (layout_of or {}).get("game", "")),
+                        "profile": profile, "privacy": self.setting("--privacy", "private", profile),
                         "mb": round(clip.stat().st_size / 1e6, 1), "title": title, "description": description,
                         **reviewed.get(clip.name, {"state": "uploaded" if clip.parent.name == "uploaded" else "waiting"})})
         return {"clips": out, "privacy": self.setting("--privacy", "private")}
@@ -591,6 +645,9 @@ class Board:
             return "That clip is not there any more"
         if privacy not in ("private", "unlisted", "public"):
             return "Pick who can see it"
+        profile = clip_profile(clip)
+        if not upload.signed_in(profile):
+            return "Sign in to YouTube for this channel first: Channels, then Sign in"
         title, description = str(title or "").strip(), str(description or "").strip()
         if not title or len(title) > 100:
             return "The title must have 1 to 100 characters"
@@ -609,8 +666,8 @@ class Board:
                     self.first_thumbnail(name)
                 video = upload.publish(clip, clip_source(name)[1], privacy, title.translate(literal),
                                        description.translate(literal), say=said.append,
-                                       tags=str(tags if tags is not None else self.setting("--hashtags", upload.HASHTAGS)),
-                                       thumbnail=picture if picture.is_file() else None)
+                                       tags=str(tags if tags is not None else self.setting("--hashtags", upload.HASHTAGS, profile)),
+                                       thumbnail=picture if picture.is_file() else None, profile=profile)
                 result = {"state": "uploaded", "privacy": privacy, "id": video,
                           "thumbnail": next((line for line in said if line.startswith("thumbnail")), "")}
                 note = f"[review] uploaded {name} ({privacy}): https://youtube.com/shorts/{video}"
@@ -686,6 +743,7 @@ class Board:
                 line = f"{line} {word}".strip()
         lines += [line] if line else []
         draw = "scale=1080:1920,setsar=1"  # the words sit below the cam panel, so the face stays in view
+        colors = thumb_colors(clip_profile(clip))
         cards = []
         # big-thumbnail lettering in the channel's colours: spike red, then light, with a graphite outline
         size = min(250, round(1080 * 1.9 / max([len(x) for x in lines] or [1])))
@@ -695,15 +753,15 @@ class Board:
         if lines:  # the channel's chat meter above the words: grey bars, the last one spiking red
             for i, tall in enumerate((30, 50, 38, 62, 96)):
                 x = 451 + i * 38
-                draw += (f",drawbox=x={x - 5}:y={690 - tall - 5}:w=36:h={tall + 10}:color=0x141415:t=fill,"
-                         f"drawbox=x={x}:y={690 - tall}:w=26:h={tall}:color={'0xE5484D' if i == 4 else '0x85858B'}:t=fill")
+                draw += (f",drawbox=x={x - 5}:y={690 - tall - 5}:w=36:h={tall + 10}:color={colors['ink']}:t=fill,"
+                         f"drawbox=x={x}:y={690 - tall}:w=26:h={tall}:color={colors['accent'] if i == 4 else '0x85858B'}:t=fill")
         for n, words_on_line in enumerate(lines):
             card = clip.with_suffix(f".thumb{n}.txt")
             card.write_text(words_on_line, encoding="utf-8")
             cards.append(card)
             draw += (f",drawtext=textfile={watcher.quote(card)}:expansion=none:{face}:fontsize={size}:"
-                     f"fontcolor={'0xE5484D' if n == 0 else '0xEDEDED'}:borderw={max(6, size // 11)}:bordercolor=0x141415:"
-                     f"shadowcolor=0x141415@0.8:shadowx={size // 22}:shadowy={size // 18}:"
+                     f"fontcolor={colors['accent'] if n == 0 else colors['light']}:borderw={max(6, size // 11)}:"
+                     f"bordercolor={colors['ink']}:shadowcolor={colors['ink']}@0.8:shadowx={size // 22}:shadowy={size // 18}:"
                      f"x=(w-text_w)/2:y={712 + n * round(size * 1.08)}")
         try:
             watcher.run("ffmpeg", "-nostdin", "-y", "-loglevel", "error", "-ss", f"{at:.3f}", "-i", clip,
@@ -729,7 +787,7 @@ class Board:
         if not clip.with_suffix(".jpg").is_file():
             return "Make a thumbnail first"
         try:
-            outcome = upload.set_thumbnail(done["id"], clip.with_suffix(".jpg"))
+            outcome = upload.set_thumbnail(done["id"], clip.with_suffix(".jpg"), profile=clip_profile(clip))
         except (Exception, SystemExit) as e:
             return f"YouTube could not be reached: {e}"
         with self.lock:
@@ -737,6 +795,122 @@ class Board:
             self.keep_reviewed()
             self.say(f"[review] {name}: {outcome}")
         return None if outcome == "thumbnail set" else outcome
+
+    def channels(self):
+        """Every channel profile with its sign-in state, and the default channel's sign-in state."""
+        out = []
+        for folder in sorted((HERE / "profiles").iterdir()) if (HERE / "profiles").is_dir() else []:
+            data = read_profile(folder.name)
+            if data is None:
+                continue
+            saved = data.get("colors") if isinstance(data.get("colors"), dict) else {}
+            out.append({"id": folder.name, "name": str(data.get("name") or folder.name), "settings": profile_settings(folder.name),
+                        "colors": {**brand.COLORS, **{k: v for k, v in saved.items() if k in brand.COLORS}},
+                        "signed_in": upload.signed_in(folder.name), "own_client": (folder / "client_secret.json").is_file(),
+                        "signing_in": folder.name in self.signing, "problem": self.sign_problems.get(folder.name, ""),
+                        "files": {name: (folder / "brand" / name).is_file() for name in PROFILE_FILES}})
+        return {"channels": out, "default": {"signed_in": upload.signed_in(""), "signing_in": "" in self.signing,
+                                             "problem": self.sign_problems.get("", "")}}
+
+    def save_channel(self, body):
+        """Create a channel profile, or change one. Returns (what is wrong or None, the profile's id)."""
+        name = " ".join(str(body.get("name") or "").split())[:60]
+        if not name:
+            return "Give the channel a name", None
+        pid = str(body.get("id") or "")
+        if pid and not read_profile(pid):
+            return "That channel is not there any more", None
+        if not pid:
+            base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:30] or "channel"
+            pid, n = base, 2
+            while (HERE / "profiles" / pid).exists():
+                pid, n = f"{base}-{n}", n + 1
+        given = body.get("settings") if isinstance(body.get("settings"), dict) else {}
+        settings = {}
+        for flag, value in given.items():
+            value = str(value).strip()
+            if flag not in PROFILE_FLAGS:
+                return f"{flag} cannot be set for a channel", None
+            if "\n" in value or len(value) > 500:
+                return f"The value of {flag} is not usable", None
+            if value:
+                settings[flag] = value
+        for flag in ("--logo", "--intro", "--outro"):
+            if flag in settings:
+                where = (HERE / settings[flag]).resolve()
+                if not where.is_file() or not where.is_relative_to(HERE.resolve()):
+                    return f"The file for {flag} is not in the clip-watcher folder", None
+        problem = watcher.option_error([f"{k}={v}" for k, v in settings.items()])
+        if problem:
+            return problem, None
+        colors = {}
+        for key, value in (body.get("colors") if isinstance(body.get("colors"), dict) else {}).items():
+            if key not in brand.COLORS or not re.fullmatch(r"#[0-9A-Fa-f]{6}", str(value)):
+                return f"The {key} colour must look like #E5484D", None
+            colors[key] = str(value).upper()
+        folder = HERE / "profiles" / pid
+        folder.mkdir(parents=True, exist_ok=True)
+        fresh = folder / "profile.json.tmp"
+        fresh.write_text(json.dumps({"name": name, "settings": settings, "colors": colors}, indent=1), encoding="utf-8")
+        os.replace(fresh, folder / "profile.json")
+        return None, pid
+
+    def delete_channel(self, pid):
+        if not read_profile(pid):
+            return "That channel is not there any more"
+        with self.lock:
+            if any(stream.profile == pid for stream in self.streams.values()):
+                return "A stream still uses this channel; pick another channel for it first"
+        shutil.rmtree(HERE / "profiles" / pid, ignore_errors=True)
+
+    def draw_brand(self, pid, tagline):
+        """Draw the channel's intro, outro, profile picture and banner from its name, handle and colours."""
+        data = read_profile(pid)
+        if not data:
+            return "That channel is not there any more"
+        settings = profile_settings(pid)
+        try:
+            brand.make(data.get("name") or pid, settings.get("--tag") or "@" + pid.replace("-", ""),
+                       HERE / "profiles" / pid / "brand", data.get("colors"), str(tagline or "the best moments")[:60])
+        except (subprocess.CalledProcessError, OSError) as e:
+            return f"The files could not be drawn: {e}"
+        settings["--intro"], settings["--outro"] = (f"profiles/{pid}/brand/intro.mp4", f"profiles/{pid}/brand/outro.mp4")
+        data["settings"] = settings
+        (HERE / "profiles" / pid / "profile.json").write_text(json.dumps(data, indent=1), encoding="utf-8")
+
+    def sign_in(self, pid):
+        """Open the Google sign-in in the browser of this computer for a channel; the list shows how it went."""
+        if pid and not read_profile(pid):
+            return "That channel is not there any more"
+        with self.lock:
+            if pid in self.signing:
+                return "The sign-in is already open in the browser on this computer"
+            self.signing.add(pid)
+            self.sign_problems.pop(pid, None)
+
+        def run():
+            try:
+                upload.sign_in(pid)
+                problem = ""
+            except (Exception, SystemExit) as e:  # a closed tab or a missing file must reach the page
+                problem = str(e)[:300] or "The sign-in did not finish"
+            with self.lock:
+                self.signing.discard(pid)
+                if problem:
+                    self.sign_problems[pid] = problem
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def set_channel(self, stream_id, pid):
+        pid = str(pid or "")
+        if pid and not read_profile(pid):
+            return "That channel is not there any more"
+        with self.lock:
+            stream = self.streams.get(stream_id)
+            if not stream:
+                return "That stream is not on the board"
+            stream.profile = pid
+            self.save()
 
     def clear(self):
         """Delete every clip still waiting for review; uploaded ones in clips/uploaded/ stay."""
@@ -819,8 +993,20 @@ class Board:
     @staticmethod
     def media(query, headers, body):
         """Keep a file picked on the page (intro, outro or logo) in brand/, and say where it went."""
-        kind, name = query.get("kind", [""])[0], query.get("name", [""])[0]
+        kind, name, pid = query.get("kind", [""])[0], query.get("name", [""])[0], query.get("profile", [""])[0]
         suffix = Path(name).suffix.lower()
+        if pid and not read_profile(pid):
+            return 400, {"error": "That channel is not there any more"}
+        if kind == "client":  # the channel's own Google project, from Google Cloud Console
+            try:
+                length = int(headers.get("Content-Length") or 0)
+                given = json.loads(body.read(length)) if 0 < length <= 20000 else None
+            except (ValueError, OSError):
+                given = None
+            if not pid or not isinstance(given, dict) or not isinstance(given.get("installed"), dict):
+                return 400, {"error": "Pick the client_secret.json of a Desktop app from Google Cloud Console"}
+            (HERE / "profiles" / pid / "client_secret.json").write_text(json.dumps(given), encoding="utf-8")
+            return 200, {"path": f"profiles/{pid}/client_secret.json"}
         if kind not in ("intro", "outro", "logo") or suffix not in (
                 (".png", ".jpg", ".jpeg", ".webp") if kind == "logo" else (".mp4", ".mov", ".mkv", ".webm")):
             return 400, {"error": "Pick a video file (an image for the logo)"}
@@ -830,8 +1016,8 @@ class Board:
             length = 0
         if not 0 < length <= 500_000_000:
             return 400, {"error": "The file must be under 500 MB"}
-        folder = HERE / "brand"
-        folder.mkdir(exist_ok=True)
+        folder = HERE / "profiles" / pid / "brand" if pid else HERE / "brand"
+        folder.mkdir(parents=True, exist_ok=True)
         stem = re.sub(r"[^A-Za-z0-9_-]+", "-", Path(name).stem).strip("-")[:40] or kind
         target = folder / f"{kind}-{stem}{suffix}"
         with open(target, "wb") as out:
@@ -845,7 +1031,7 @@ class Board:
         if left:
             target.unlink(missing_ok=True)
             return 400, {"error": "The file did not arrive whole; try again"}
-        return 200, {"path": f"brand/{target.name}"}
+        return 200, {"path": f"{folder.relative_to(HERE).as_posix()}/{target.name}"}
 
     def state(self, since):
         with self.lock:
@@ -957,6 +1143,15 @@ def make_server(port=0, lan_key=None):
             elif path == "/api/state":
                 since = parse_qs(query).get("since", ["0"])[0]
                 self.reply(200, board.state(int(since) if since.isdigit() else 0))
+            elif path == "/api/channels":
+                self.reply(200, board.channels())
+            elif path == "/api/channel-file":
+                query = parse_qs(query)
+                name, pid = query.get("name", [""])[0], query.get("id", [""])[0]
+                target = HERE / "profiles" / pid / "brand" / name
+                if name not in PROFILE_FILES or not read_profile(pid) or not target.is_file():
+                    return self.reply(404, {"error": "That file is not there"})
+                self.reply(200, target.read_bytes(), "image/png" if name.endswith(".png") else "video/mp4")
             elif path == "/api/clips":
                 self.reply(200, board.clips())
             elif path in ("/api/clip", "/api/thumb"):
@@ -1034,6 +1229,18 @@ def make_server(port=0, lan_key=None):
                 rows = [{**c, "link": f"{'kick.com' if site == 'kick' else 'twitch.tv'}/{c['channel']}",
                          "id": f"{site}-{c['channel'].lower()}"} for c in found if watcher.parse_channel(c["channel"])]
                 return self.reply(200, {"category": name, "site": site, "streams": rows})
+            elif self.path == "/api/channel/save":
+                error, pid = board.save_channel(body)
+                if not error:
+                    return self.reply(200, {"id": pid})
+            elif self.path == "/api/channel/delete":
+                error = board.delete_channel(str(body.get("id") or ""))
+            elif self.path == "/api/channel/brand":
+                error = board.draw_brand(str(body.get("id") or ""), body.get("tagline"))
+            elif self.path == "/api/channel/signin":
+                error = board.sign_in(str(body.get("id") or ""))
+            elif self.path == "/api/stream-channel":
+                error = board.set_channel(stream_id, body.get("profile"))
             elif self.path == "/api/review/upload":
                 error = board.publish(body.get("name"), body.get("title"), body.get("description"), body.get("privacy"),
                                       body.get("tags"))

@@ -996,7 +996,7 @@ def make_clip(recorder, out, source, args, lag, noticed):
             # how the clip is put together, so the board can cut a different teaser from it later
             a, b = teaser_span(o.teaser, spike, length) if o.teaser > 0 else (0.0, 0.0)
             game = stream_category(source)
-            out.with_suffix(".json").write_text(json.dumps({"game": game,
+            out.with_suffix(".json").write_text(json.dumps({"game": game, "profile": args.profile or "",
                 "teaser": round(b - a, 3), "teaser_from": round(a, 3), "spike": round(spike, 3), "main": round(length, 3),
                 "intro": round(next((x[3] for x in extras if x[1] == "intro"), 0.0), 3)}), encoding="utf-8")
             if o.captions != "off" and said:
@@ -1006,7 +1006,7 @@ def make_clip(recorder, out, source, args, lag, noticed):
                 log(tag, f"saved {out}")
             if args.upload:
                 upload.publish(out, source, args.privacy, args.title, args.description, lambda text: log(tag, text),
-                               args.hashtags, game=game)
+                               args.hashtags, game=game, profile=args.profile or "")
         finally:
             slot.close()
     except Exception as e:  # one bad clip must not take the channel down
@@ -1132,6 +1132,33 @@ def box(text):
     return x, y, w, h
 
 
+def option_error(listed):
+    """What is wrong with a list of options like ["--zoom=0.1", "--tag=@me"], or None when they are fine."""
+    parser = build_parser()
+
+    def fail(message):
+        raise ValueError(message)
+
+    parser.error = fail
+    try:
+        parser.parse_args(listed)
+    except ValueError as e:
+        return str(e)
+    return None
+
+
+def profile_defaults(parser, name):
+    """A channel profile's settings as parser defaults. profiles/<name>/profile.json holds them as options."""
+    path = HERE / "profiles" / name / "profile.json"
+    try:
+        settings = json.loads(path.read_text(encoding="utf-8")).get("settings") or {}
+    except (OSError, ValueError, AttributeError):
+        parser.error(f"there is no channel profile '{name}' ({path} is missing)")
+    listed = [f"{flag}={value}" for flag, value in settings.items() if str(value) != ""]
+    base, mine = vars(parser.parse_args([])), vars(parser.parse_args(listed))
+    return {key: value for key, value in mine.items() if value != base[key] and key != "profile"}
+
+
 def share(text):
     """A cam panel height from 0.12 to 0.6 of the clip; 'auto' or nothing means it follows the cam box."""
     if text in ("", "auto"):
@@ -1158,6 +1185,8 @@ def build_parser():
     # the settings page drives us through stdin; --stdin-stop is what an older, still running page calls it
     p.add_argument("--stdin-control", "--stdin-stop", dest="stdin_control", action="store_true", help=argparse.SUPPRESS)
     stream = p.add_argument_group("stream")
+    stream.add_argument("--profile", help="channel profile to use: its tag, intro, outro, hashtags and YouTube sign-in; "
+                                          "see profiles/<name>/")
     stream.add_argument("--kick", action="store_true", help="channels given by name are on Kick, not Twitch")
     stream.add_argument("--category",
                         help="also watch the most watched live channels of this category right now; needs apps.json")
@@ -1334,6 +1363,9 @@ def control():
 
 def main():
     p = build_parser()
+    chosen, _ = p.parse_known_args()
+    if chosen.profile:
+        p.set_defaults(**profile_defaults(p, chosen.profile))  # what is typed on the command line still wins
     args = p.parse_intermixed_args()
     parsed = [parse_target(text) for text in args.channels]
     if None in parsed:

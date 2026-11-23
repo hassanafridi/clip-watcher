@@ -1,3 +1,4 @@
+import contextlib
 import io
 import json
 import os
@@ -207,6 +208,29 @@ for bad in ("0.1", "0.7", "wide"):
         raise AssertionError(bad)
     except Exception as e:
         assert type(e).__name__ == "ArgumentTypeError", (bad, e)
+
+# --- channel profiles in the watcher: they give defaults, what is typed wins ---
+with tempfile.TemporaryDirectory() as folder:
+    real_here, watcher.HERE = watcher.HERE, Path(folder)
+    try:
+        (Path(folder) / "profiles" / "pod").mkdir(parents=True)
+        (Path(folder) / "profiles" / "pod" / "profile.json").write_text(json.dumps({"name": "Pod", "settings": {
+            "--tag": "@pod", "--zoom": "0.3", "--hashtags": "#pod #{game}", "--teaser": ""}}), encoding="utf-8")
+        parser = watcher.build_parser()
+        defaults = watcher.profile_defaults(parser, "pod")
+        assert defaults == {"tag": "@pod", "zoom": 0.3, "hashtags": "#pod #{game}"}, defaults
+        parser.set_defaults(**defaults)
+        got = parser.parse_args(["x", "--zoom", "0.5"])
+        assert (got.tag, got.zoom, got.hashtags, got.teaser) == ("@pod", 0.5, "#pod #{game}", 2.5), "typed beats the profile"
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                watcher.profile_defaults(watcher.build_parser(), "ghost")
+            raise AssertionError("a missing profile must stop the start")
+        except SystemExit:
+            pass
+    finally:
+        watcher.HERE = real_here
+assert watcher.option_error(["--zoom=0.1", "--tag=@me"]) is None and "zoom" in watcher.option_error(["--zoom=abc"])
 
 # --- upload text ---
 assert transcript(Path("missing.srt")) == ""
@@ -592,7 +616,7 @@ def run_clip(answer, lag=0, fail=None, probe="1.5\n1.5,34.5\n", speech=None, **o
     args = SimpleNamespace(before=20, after=10, jobs=1, crf=23, model="tiny", language=None, upload=False,
                            ratio=9 / 16, height=1920, face_share=1 / 3, face_zoom=4, big_face=BIG_FACE, cam="top",
                            cam_box=None, game_box=None, cam_share=None, captions="off", caption_size=6, hook="", hook_secs=3, zoom=0, tag=None,
-                           logo=None, intro=None, outro=None, teaser=0, chat_box="left", chat_lines=7, credit="")
+                           logo=None, intro=None, outro=None, teaser=0, chat_box="left", chat_lines=7, credit="", profile="")
     vars(args).update(own)
     try:
         out = watcher.CLIPS / "chan_20260101_000000.mp4"
@@ -977,7 +1001,7 @@ with tempfile.TemporaryDirectory() as folder:
     groups = call("/api/options")[1]["groups"]
     offered = {o["flag"] for g in groups for o in g["options"]}
     flags = {a.option_strings[0] for a in watcher.build_parser()._actions if a.option_strings}
-    assert offered == flags - {"-h", "--stdin-control", "--category", "--top", "--cam-box", "--game-box", "--cam-share"}, "the page offers the rest"
+    assert offered == flags - {"-h", "--stdin-control", "--category", "--top", "--cam-box", "--game-box", "--cam-share", "--profile"}, "the page offers the rest"
     assert all(o["detail"] and o["label"] for g in groups for o in g["options"]), "every option explains itself"
 
     # add: several at once, a link names its site, plain names follow the Kick box
@@ -1005,8 +1029,8 @@ with tempfile.TemporaryDirectory() as folder:
     assert call("/api/shared", {"args": ["--min=40", "--ratio=1:1", "--kick"]})[0] == 200
     saved = json.loads(gui.SAVED.read_text(encoding="utf-8"))
     assert saved == {"shared": ["--min=40", "--ratio=1:1", "--kick"], "streams": [
-        {"channel": "xqc", "kick": False, "min": 170, "factor": 2.0, **dict.fromkeys(gui.LOOK)},
-        {"channel": "dinah", "kick": False, "min": 15, "factor": 2.5, **dict.fromkeys(gui.LOOK)}]}, saved
+        {"channel": "xqc", "kick": False, "min": 170, "factor": 2.0, **dict.fromkeys(gui.LOOK), "profile": ""},
+        {"channel": "dinah", "kick": False, "min": 15, "factor": 2.5, **dict.fromkeys(gui.LOOK), "profile": ""}]}, saved
     assert call("/api/options")[1]["shared"] == ["--min=40", "--ratio=1:1", "--kick"]
 
     # finding streams by category goes through live.py; its message reaches the page as it is
@@ -1230,9 +1254,11 @@ with tempfile.TemporaryDirectory() as folder:
     for bad in ("../streams.json", "..%5Cgui.py", "nothere_20261120_120000.mp4"):
         assert ask("/api/clip?name=" + bad)[0] == 404, bad
 
-    sent, real_publish = [], upload.publish
+    sent, real_publish, signed_before = [], upload.publish, upload.signed_in
 
-    def fake_publish(clip, source, privacy, title, description, say=print, tags="", thumbnail=None):
+    upload.signed_in = lambda profile="": True
+
+    def fake_publish(clip, source, privacy, title, description, say=print, tags="", thumbnail=None, game="", profile=""):
         sent.append((Path(clip).name, source, privacy, title, description, tags, thumbnail and Path(thumbnail).name))
         say("thumbnail set")
         return "abc123"
@@ -1273,10 +1299,10 @@ with tempfile.TemporaryDirectory() as folder:
         # a thumbnail YouTube refused can be sent again later, and its answer is kept on the clip
         real_set = upload.set_thumbnail
         try:
-            upload.set_thumbnail = lambda video, picture, http=None: "thumbnail not set: verify yours at youtube.com/verify"
+            upload.set_thumbnail = lambda video, picture, http=None, profile="": "thumbnail not set: verify yours at youtube.com/verify"
             assert ask("/api/review/send-thumbnail", {"name": "xqc_20261120_120000.mp4"}) == (
                 400, {"error": "thumbnail not set: verify yours at youtube.com/verify"})
-            upload.set_thumbnail = lambda video, picture, http=None: (video, Path(picture).name) == (
+            upload.set_thumbnail = lambda video, picture, http=None, profile="": (video, Path(picture).name) == (
                 "abc123", "xqc_20261120_120000.jpg") and "thumbnail set"
             assert ask("/api/review/send-thumbnail", {"name": "xqc_20261120_120000.mp4"})[0] == 200
             assert board.reviewed["xqc_20261120_120000.mp4"]["thumbnail"] == "thumbnail set"
@@ -1332,7 +1358,7 @@ with tempfile.TemporaryDirectory() as folder:
             time.sleep(0.02)
         assert "quotaExceeded" in ask("/api/clips")[1]["clips"][0]["error"] + ask("/api/clips")[1]["clips"][1].get("error", "")
     finally:
-        upload.publish = real_publish
+        upload.publish, upload.signed_in = real_publish, signed_before
     # the teaser of a clip in review is cut again from the moment picked, or taken out
     (gui.CLIPS / "dinah-kick_20261120_130000.json").write_text(json.dumps(
         {"teaser": 2.5, "teaser_from": 19.5, "spike": 20.0, "main": 30.0, "intro": 1.2}), encoding="utf-8")
@@ -1477,6 +1503,150 @@ if lan:
     httpd, _ = gui.make_server(0)
     assert httpd.server_address[0] == "127.0.0.1", "without phone mode nothing listens on the network"
     httpd.server_close()
+
+# --- channels: profiles with their own look, files and YouTube sign-in ---
+with tempfile.TemporaryDirectory() as folder:
+    real_here, real_up_here, real_signed = gui.HERE, upload.HERE, upload.signed_in
+    gui.HERE = upload.HERE = Path(folder)
+    gui.SAVED, gui.CLIPS = Path(folder) / "streams.json", Path(folder) / "clips"
+    gui.CLIPS.mkdir()
+    upload.signed_in = real_signed
+    httpd, token = gui.make_server()
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    board = httpd.board
+
+    def ask(path, body=None, raw=None):
+        data = raw if raw is not None else None if body is None else json.dumps(body).encode()
+        request = urllib.request.Request(f"http://127.0.0.1:{httpd.server_port}{path}", data=data, headers={"X-Token": token})
+        try:
+            with urllib.request.urlopen(request, timeout=10) as r:
+                return r.status, json.loads(r.read()) if "json" in r.headers["Content-Type"] else r.read()
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read())
+
+    real_brand_make, real_sign_in, real_publish, real_popen = gui.brand.make, upload.sign_in, upload.publish, subprocess.Popen
+    try:
+        status, made = ask("/api/channel/save", {"name": "Podcast Peaks", "settings": {
+            "--tag": "@podpeaks", "--hashtags": "#podpeaks #{game}", "--privacy": "unlisted", "--zoom": "0.3"},
+            "colors": {"accent": "#2e86f5"}})
+        assert (status, made) == (200, {"id": "podcast-peaks"}), (status, made)
+        assert ask("/api/channel/save", {"name": "Podcast Peaks"})[1] == {"id": "podcast-peaks-2"}, "same name, another id"
+        listed = {c["id"]: c for c in ask("/api/channels")[1]["channels"]}
+        assert set(listed) == {"podcast-peaks", "podcast-peaks-2"}
+        mine = listed["podcast-peaks"]
+        assert mine["name"] == "Podcast Peaks" and mine["settings"]["--tag"] == "@podpeaks" and mine["signed_in"] is False
+        assert mine["colors"]["accent"] == "#2E86F5" and mine["colors"]["ink"] == "#141415", "other colours stay as they were"
+        # what a channel may not hold, and what is not usable
+        outside = {"--intro": sys.executable}
+        for bad, why in (({"--upload": "1"}, "cannot be set"), ({"--min": "5"}, "cannot be set"), ({"--zoom": "lots"}, "zoom"),
+                         ({"--intro": "profiles/nothing.mp4"}, "not in the clip-watcher folder"), (outside, "not in the clip-watcher folder"),
+                         ({"--tag": "a\nb"}, "not usable")):
+            status, error = ask("/api/channel/save", {"id": "podcast-peaks", "name": "Podcast Peaks", "settings": bad})
+            assert status == 400 and why in error["error"], (bad, error)
+        assert ask("/api/channel/save", {"id": "podcast-peaks", "name": "Podcast Peaks", "colors": {"accent": "blue"}})[0] == 400
+        assert ask("/api/channel/save", {"id": "nothing", "name": "x"})[0] == 400 and ask("/api/channel/save", {"name": " "})[0] == 400
+        assert ask("/api/channel/save", {"id": "../x", "name": "x"})[0] == 400, "no path tricks in an id"
+
+        # the files of a channel: drawn for it, or picked on the page
+        def fake_make(name, handle, folder_, colors=None, tagline=""):
+            for file in gui.PROFILE_FILES:
+                (Path(folder_) / file).parent.mkdir(parents=True, exist_ok=True)
+                (Path(folder_) / file).write_bytes(b"png" if file.endswith("png") else b"mp4")
+            fake_make.args = (name, handle, colors, tagline)
+
+        gui.brand.make = fake_make
+        assert ask("/api/channel/brand", {"id": "podcast-peaks", "tagline": "sharp moments"})[0] == 200
+        assert fake_make.args[:2] == ("Podcast Peaks", "@podpeaks") and fake_make.args[3] == "sharp moments"
+        assert fake_make.args[2]["accent"] == "#2E86F5"
+        assert ask("/api/channels")[1]["channels"][0]["settings"]["--intro"] == "profiles/podcast-peaks/brand/intro.mp4"
+        assert ask("/api/channel-file?id=podcast-peaks&name=avatar.png") == (200, b"png")
+        for url in ("/api/channel-file?id=podcast-peaks&name=profile.json", "/api/channel-file?id=..&name=avatar.png",
+                    "/api/channel-file?id=podcast-peaks&name=../../streams.json"):
+            assert ask(url)[0] == 404, url
+        assert ask("/api/media?kind=intro&name=Mine.mp4&profile=podcast-peaks", raw=b"v") == (
+            200, {"path": "profiles/podcast-peaks/brand/intro-Mine.mp4"})
+        assert ask("/api/media?kind=intro&name=Mine.mp4&profile=nothing", raw=b"v")[0] == 400
+        secret = json.dumps({"installed": {"client_id": "x"}}).encode()
+        assert ask("/api/media?kind=client&name=client_secret.json&profile=podcast-peaks", raw=secret)[0] == 200
+        assert ask("/api/channels")[1]["channels"][0]["own_client"] is True
+        for bad_secret in (b"not json", json.dumps({"web": {}}).encode()):
+            assert ask("/api/media?kind=client&name=c.json&profile=podcast-peaks", raw=bad_secret)[0] == 400
+        assert ask("/api/media?kind=client&name=c.json", raw=secret)[0] == 400, "a client file belongs to a channel"
+
+        # signing in to YouTube for a channel: in the background, with the reason when it fails
+        outcome = []
+        upload.sign_in = lambda profile="", wait=300: outcome.append(profile)
+        assert ask("/api/channel/signin", {"id": "podcast-peaks"})[0] == 200
+        deadline = time.time() + 3
+        while not outcome or board.signing:
+            assert time.time() < deadline
+            time.sleep(0.02)
+        assert outcome == ["podcast-peaks"]
+
+        def refused(profile="", wait=300):
+            raise SystemExit("client_secret.json not found; see README")
+
+        upload.sign_in = refused
+        assert ask("/api/channel/signin", {"id": "podcast-peaks-2"})[0] == 200
+        deadline = time.time() + 3
+        while "podcast-peaks-2" not in board.sign_problems:
+            assert time.time() < deadline
+            time.sleep(0.02)
+        assert "client_secret.json" in {c["id"]: c for c in ask("/api/channels")[1]["channels"]}["podcast-peaks-2"]["problem"]
+        assert ask("/api/channel/signin", {"id": "nothing"})[0] == 400
+
+        # a stream picks a channel; its settings win over the shared ones, the rest of the shared ones stay
+        board.add("podhost", 15, 2.5)
+        board.shared = ["--tag=@shared", "--privacy=public", "--ratio=1:1"]
+        assert ask("/api/stream-channel", {"id": "twitch-podhost", "profile": "nothing"})[0] == 400
+        assert ask("/api/stream-channel", {"id": "nothing", "profile": ""})[0] == 400
+        assert ask("/api/stream-channel", {"id": "twitch-podhost", "profile": "podcast-peaks"})[0] == 200
+        assert ask("/api/state")[1]["streams"][0]["profile"] == "podcast-peaks" if ask("/api/state")[1]["streams"] else True
+        subprocess.Popen = FakeChild
+        try:
+            assert board.start("twitch-podhost", None) is None
+        finally:
+            subprocess.Popen = real_popen
+        command = FakeChild.made[-1].command
+        assert "--profile=podcast-peaks" in command and "--ratio=1:1" in command, command
+        assert "--tag=@shared" not in command and "--privacy=public" not in command, "the channel's own settings win"
+        FakeChild.made[-1].gone.set()
+        deadline = time.time() + 3
+        while board.streams["twitch-podhost"].proc:
+            assert time.time() < deadline
+            time.sleep(0.02)
+        assert ask("/api/channel/delete", {"id": "podcast-peaks"})[0] == 400, "a stream still uses it"
+        board.streams["twitch-podhost"].profile = "ghost"
+        assert "is gone" in board.start("twitch-podhost", None), "a stream whose channel vanished says so"
+        assert ask("/api/stream-channel", {"id": "twitch-podhost", "profile": ""})[0] == 200
+        assert ask("/api/channel/delete", {"id": "podcast-peaks-2"})[0] == 200 and not (Path(folder) / "profiles" / "podcast-peaks-2").exists()
+        assert ask("/api/channel/delete", {"id": "podcast-peaks-2"})[0] == 400
+
+        # a clip carries its channel: suggestions from the channel, the upload with its sign-in, the thumbnail in its colours
+        (gui.CLIPS / "podhost_20261122_100000.mp4").write_bytes(b"v")
+        (gui.CLIPS / "podhost_20261122_100000.json").write_text(json.dumps(
+            {"profile": "podcast-peaks", "game": "Grand Theft Auto VI", "teaser": 0, "intro": 0, "spike": 5, "main": 30}), encoding="utf-8")
+        (gui.CLIPS / "plain_20261122_100000.mp4").write_bytes(b"v")
+        listed = {c["name"]: c for c in ask("/api/clips")[1]["clips"]}
+        assert listed["podhost_20261122_100000.mp4"]["tags"] == "#podpeaks #GTA6 #Shorts"
+        assert listed["podhost_20261122_100000.mp4"]["privacy"] == "unlisted" and listed["podhost_20261122_100000.mp4"]["profile"] == "podcast-peaks"
+        assert listed["plain_20261122_100000.mp4"]["profile"] == "" and listed["plain_20261122_100000.mp4"]["privacy"] == "public"
+        sent = []
+        upload.publish = lambda *a, **kw: sent.append((kw.get("profile"), kw.get("tags"))) or "vid1"
+        assert ask("/api/review/upload", {"name": "podhost_20261122_100000.mp4", "title": "t", "privacy": "unlisted"})[0] == 400, \
+            "not signed in for that channel"
+        (Path(folder) / "profiles" / "podcast-peaks" / "token.json").write_text("{}", encoding="utf-8")
+        assert ask("/api/review/upload", {"name": "podhost_20261122_100000.mp4", "title": "t", "privacy": "unlisted"})[0] == 200
+        deadline = time.time() + 3
+        while not sent:
+            assert time.time() < deadline
+            time.sleep(0.02)
+        assert sent[0] == ("podcast-peaks", "#podpeaks #{game}"), sent
+        assert gui.thumb_colors("podcast-peaks")["accent"] == "0x2E86F5" and gui.thumb_colors("")["accent"] == "0xE5484D"
+    finally:
+        gui.brand.make, upload.sign_in, upload.publish, subprocess.Popen = real_brand_make, real_sign_in, real_publish, real_popen
+        gui.HERE, upload.HERE, upload.signed_in = real_here, real_up_here, real_signed
+        httpd.shutdown()
 
 # the two lines of watcher.py that the board reads must stay in the form it expects
 stat = gui.STAT.match("[xqc] 1805s | Msgs: 130 | Median: 128.5 | Threshold: 325 | recording")
