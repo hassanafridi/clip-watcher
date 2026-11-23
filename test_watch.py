@@ -66,6 +66,21 @@ face = steady_face([(100, 100, 50, 50)] * 20 + [(900, 500, 40, 40)] * 3, 30)
 assert face == (100, 100, 50, 50), face
 
 assert ratio("9:16") == 9 / 16 and ratio("1:1") == 1
+assert abs(ratio("21:9") - 21 / 9) < 1e-9 and abs(ratio("1.91:1") - 1.91) < 1e-9
+for bad in ("1:9", "9:1", "0.5:0", "-3:4"):
+    try:
+        ratio(bad)
+        raise AssertionError(bad)
+    except Exception as e:
+        assert type(e).__name__ == "ArgumentTypeError", (bad, e)
+# size is the longer side, whatever the shape
+for text, want in (("9:16", (1080, 1920)), ("1:1", (1920, 1920)), ("16:9", (1920, 1080)), ("21:9", (1920, 822)),
+                   ("4:5", (1536, 1920))):
+    shaped = watcher.shape(SimpleNamespace(height=1920, ratio=ratio(text), cam="top", face_share=1 / 3))
+    assert (shaped.width, shaped.height) == want, (text, shaped.width, shaped.height)
+reshaped = watcher.shape(SimpleNamespace(height=1920, ratio=ratio("16:9"), cam="over", face_share=1 / 3))
+reshaped.ratio = ratio("9:16")
+assert (watcher.shape(reshaped).width, reshaped.height, reshaped.face_h) == (1080, 1920, 0), "reshaping keeps the size"
 for bad in ("9x16", "0:16", "16"):
     try:
         ratio(bad)
@@ -144,6 +159,54 @@ for bad in ("0.05", "0.9", "half"):
     except Exception as e:
         assert type(e).__name__ == "ArgumentTypeError", (bad, e)
 assert watcher.quote(r"C:\Users\a b\x.srt") == "'C\\:/Users/a b/x.srt'"
+
+# --- the cam over the game: the game fills the clip, the cam sits in a corner ---
+def over_options(corner="tr", size=0.34, ratio=9 / 16, cam="over"):
+    return watcher.shape(SimpleNamespace(height=1920, ratio=ratio, cam=cam, face_share=1 / 3, face_zoom=4, big_face=BIG_FACE,
+                                         cam_box=None, game_box=None, cam_share=None, cam_corner=corner, cam_size=size,
+                                         zoom=0, caption_size=6, hook_secs=3, teaser=0))
+
+
+for corner in ("tl", "tr", "bl", "br"):
+    o = over_options(corner)
+    assert o.face_h == 0 and (o.width, o.height) == (1080, 1920)
+    over = watcher.cam_over(1920, 1080, None, o, (100, 700, 600, 340))
+    (ow, oh), (x, y) = over["size"], over["at"]
+    assert ow == 366 and 0 < x and x + ow < 1080 and 0 < y and y + oh < 1920, (corner, over)
+    assert (x < 540) == (corner[1] == "l") and (y < 960) == (corner[0] == "t"), (corner, over)
+    kw, kh, kx, ky = over["crop"]
+    assert (kw, kh) == (600, 340) and kx + kw <= 1920 and ky + kh <= 1080
+    graph = watcher.layout(1920, 1080, None, o, box=(100, 700, 600, 340))
+    assert graph.count("overlay=") == 1 and f"overlay={x}:{y}" in graph and "scale=1080:1920" in graph, graph
+assert watcher.cam_over(1920, 1080, None, over_options(), None) is None, "no cam box and no face: nothing to put over"
+assert watcher.cam_over(1920, 1080, (900, 100, 60, 60), over_options(), None)["size"][0] == 366, "a small face gets a cam"
+assert watcher.cam_over(1920, 1080, (500, 100, 400, 400), over_options(), None) is None, "a big face fills the clip instead"
+assert watcher.cam_over(1920, 1080, None, over_options(cam="top"), (100, 700, 600, 340)) is None
+tall = watcher.cam_over(1920, 1080, None, over_options(), (100, 100, 200, 900))
+assert tall["size"][1] <= 0.4 * 1920 + 2, "a tall cam is made narrower, not taller than 40% of the clip"
+wide_clip = over_options("br", ratio=16 / 9)
+assert (wide_clip.width, wide_clip.height) == (1920, 1080)
+assert "overlay=" in watcher.layout(1920, 1080, None, wide_clip, box=(100, 700, 600, 340)), "also on a wide clip"
+# the title line goes under a cam at the top, and the logo moves to the other top corner
+boxed = lambda corner: (lambda o: (setattr(o, 'cam_box', (0.05, 0.6, 0.3, 0.3)), o)[1])(over_options(corner))
+top_left = watcher.edit(1920, 1080, None, boxed('tl'), 0, 30, 20, '60/1', True, extras=[(1, 'logo', False, 0)])
+assert 'overlay=W-w-' in top_left, 'cam in the top left: the logo stays top right'
+top_right = watcher.edit(1920, 1080, None, boxed('tr'), 0, 30, 20, '60/1', True, extras=[(1, 'logo', False, 0)])
+assert 'overlay=43:' in top_right and 'overlay=W-w-' not in top_right, 'cam in the top right: the logo goes top left'
+_, _, _, ptop, pbottom, _ = watcher.panels(1920, 1080, None, over_options("tl"))
+assert ptop == 0, "no box and no face: nothing over, nothing to make room for"
+o = over_options("bl")
+o.cam_box = (0.05, 0.6, 0.3, 0.3)
+_, _, _, ptop, pbottom, over = watcher.panels(1920, 1080, None, o)
+assert ptop == 0 and pbottom == 1920 - over["at"][1] > over["size"][1], "the chat box is kept above a cam in the bottom"
+for text, want in (("0.2", 0.2), ("0.6", 0.6)):
+    assert watcher.cam_size(text) == want
+for bad in ("0.1", "0.7", "wide"):
+    try:
+        watcher.cam_size(bad)
+        raise AssertionError(bad)
+    except Exception as e:
+        assert type(e).__name__ == "ArgumentTypeError", (bad, e)
 
 # --- upload text ---
 assert transcript(Path("missing.srt")) == ""
@@ -653,11 +716,12 @@ assert "Nightbot" not in ass and "kaimafiabot" not in ass and "wake up *** lol" 
 quits = []
 real_stdin, real_quit = sys.stdin, watcher.quit_now
 sys.stdin, watcher.quit_now = io.StringIO("min=170\nfactor=1.8\nnonsense\nmin=abc\nratio=4:5\nratio=wide\n"
-                                         "cam=0.7,0.05,0.25,0.3\ncam=2,2,2,2\nstop\nquit\n"), lambda: quits.append(1)
+                                         "cam=0.7,0.05,0.25,0.3\ncam=2,2,2,2\nmode=over\nmode=sideways\ncorner=bl\ncorner=middle\ncamsize=0.4\ncamsize=9\nstop\nquit\n"), lambda: quits.append(1)
 watcher.STOP.clear()
 watcher.control()
 sys.stdin, watcher.quit_now = real_stdin, real_quit
-assert watcher.TUNE == {"min": 170, "factor": 1.8, "ratio": 0.8, "cam_box": (0.7, 0.05, 0.25, 0.3)}, watcher.TUNE
+assert watcher.TUNE == {"min": 170, "factor": 1.8, "ratio": 0.8, "cam_box": (0.7, 0.05, 0.25, 0.3), "cam": "over",
+                        "cam_corner": "bl", "cam_size": 0.4}, watcher.TUNE
 assert watcher.STOP.is_set() and quits == [1]
 watcher.STOP.clear()
 watcher.TUNE.clear()
@@ -941,9 +1005,8 @@ with tempfile.TemporaryDirectory() as folder:
     assert call("/api/shared", {"args": ["--min=40", "--ratio=1:1", "--kick"]})[0] == 200
     saved = json.loads(gui.SAVED.read_text(encoding="utf-8"))
     assert saved == {"shared": ["--min=40", "--ratio=1:1", "--kick"], "streams": [
-        {"channel": "xqc", "kick": False, "min": 170, "factor": 2.0, "cam": None, "game": None, "share": None, "ratio": None},
-        {"channel": "dinah", "kick": False, "min": 15, "factor": 2.5, "cam": None, "game": None, "share": None,
-         "ratio": None}]}, saved
+        {"channel": "xqc", "kick": False, "min": 170, "factor": 2.0, **dict.fromkeys(gui.LOOK)},
+        {"channel": "dinah", "kick": False, "min": 15, "factor": 2.5, **dict.fromkeys(gui.LOOK)}]}, saved
     assert call("/api/options")[1]["shared"] == ["--min=40", "--ratio=1:1", "--kick"]
 
     # finding streams by category goes through live.py; its message reaches the page as it is
@@ -1053,10 +1116,11 @@ with tempfile.TemporaryDirectory() as folder:
     assert "--ratio=1:1" not in second.command, "the stream's own shape wins over the shared one"
     assert call("/api/state")[1]["streams"][0]["cam"] == box
     assert call("/api/shape", {"id": "twitch-xqc", "cam": None, "ratio": None})[0] == 200
-    assert second.told[-4:] == ["cam=auto\n", "game=auto\n", "share=auto\n", "ratio=1:1\n"], "back to automatic"
+    assert second.told[-7:] == ["cam=auto\n", "game=auto\n", "share=auto\n", "ratio=1:1\n", "mode=top\n", "corner=tr\n",
+                                "camsize=0.34\n"], "back to automatic"
     assert call("/api/shape", {"id": "twitch-xqc", "cam": box, "ratio": "4:5", "game": [0.2, 0, 0.5, 1],
                                "share": 0.25})[0] == 200
-    assert second.told[-4:] == ["cam=0.7,0.05,0.25,0.3\n", "game=0.2,0,0.5,1\n", "share=0.25\n", "ratio=4:5\n"], \
+    assert second.told[-7:-3] == ["cam=0.7,0.05,0.25,0.3\n", "game=0.2,0,0.5,1\n", "share=0.25\n", "ratio=4:5\n"], \
         "a running stream is told at once"
     deadline = time.time() + 3
     while stream.clips < 2 or stream.frames < 2:  # its own start-up lines are read first
@@ -1098,7 +1162,8 @@ with tempfile.TemporaryDirectory() as folder:
     # the board comes back as it was left, and one damaged row costs only itself
     board = gui.Board()
     assert [s.id for s in board.streams.values()] == ["twitch-xqc", "twitch-dinah"] and board.streams["twitch-xqc"].min == 200
-    assert board.streams["twitch-xqc"].cam == [0.7, 0.05, 0.25, 0.3] and board.streams["twitch-xqc"].ratio == "4:5"
+    assert board.streams["twitch-xqc"].look["cam"] == [0.7, 0.05, 0.25, 0.3]
+    assert board.streams["twitch-xqc"].look["ratio"] == "4:5"
     saved = json.loads(gui.SAVED.read_text(encoding="utf-8"))
     saved["streams"].insert(1, {"channel": "broken"})
     gui.SAVED.write_text(json.dumps(saved), encoding="utf-8")
@@ -1352,6 +1417,24 @@ with tempfile.TemporaryDirectory() as folder:
             assert e.code == 403
     finally:
         gui.HERE = real_here
+    # a stream's own cam mode, corner and width: checked, kept, told to a running stream, and winning over the settings
+    for bad in ({"mode": "sideways"}, {"corner": "middle"}, {"size": 0.9}, {"size": "wide"}, {"ratio": "30:1"}):
+        assert ask("/api/shape", {"id": "dinah-kick_20261120_130000", **bad})[0] == 400, bad
+    board.add("dina", 15, 2.5)
+    assert ask("/api/shape", {"id": "twitch-dina", "mode": "over", "corner": "bl", "size": 0.4, "ratio": "21:9"})[0] == 200
+    assert board.streams["twitch-dina"].look["mode"] == "over" and board.streams["twitch-dina"].look["ratio"] == "21:9"
+    board.shared = ["--cam=top", "--cam-corner=tr", "--ratio=1:1", "--privacy=public"]
+    real_popen, subprocess.Popen = subprocess.Popen, FakeChild
+    try:
+        board.start("twitch-dina", None)
+    finally:
+        subprocess.Popen = real_popen
+    command = FakeChild.made[-1].command
+    assert {"--cam=over", "--cam-corner=bl", "--cam-size=0.4", "--ratio=21:9", "--privacy=public"} <= set(command), command
+    assert "--cam=top" not in command and "--cam-corner=tr" not in command and "--ratio=1:1" not in command, command
+    assert ask("/api/shape", {"id": "twitch-dina", "mode": "off"})[0] == 200
+    assert FakeChild.made[-1].told[-3:] == ["mode=off\n", "corner=tr\n", "camsize=0.34\n"], FakeChild.made[-1].told
+    FakeChild.made[-1].gone.set()
     # a stream started from the board never uploads on its own, even with the upload setting on
     board.add("xqc", 15, 2.5)
     board.shared = ["--upload", "--privacy=public"]

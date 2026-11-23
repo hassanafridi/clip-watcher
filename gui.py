@@ -53,8 +53,8 @@ LABELS = {
     "--bucket": ("Counting interval", "s"), "--window": ("Comparison window", "s"), "--warmup": ("Warm-up", "s"),
     "--before": ("Before the spike", "s"), "--after": ("After the spike", "s"),
     "--cooldown": ("Pause between clips", "s"), "--ratio": ("Aspect ratio", ""),
-    "--height": ("Clip height", "px"), "--crf": ("Picture quality", ""),
-    "--cam": ("Streamer cam position", ""), "--face-share": ("Cam panel size", ""),
+    "--height": ("Clip size", "px"), "--crf": ("Picture quality", ""),
+    "--cam": ("Streamer cam", ""), "--cam-corner": ("Cam corner over the game", ""), "--cam-size": ("Cam width over the game", ""), "--face-share": ("Cam panel size", ""),
     "--face-zoom": ("Cam zoom", ""), "--big-face": ("Full-frame face threshold", ""),
     "--model": ("Subtitle model", ""), "--language": ("Subtitle language", ""),
     "--jobs": ("Clips finished at once", ""),
@@ -94,13 +94,16 @@ DETAILS = {
                   "turn into several overlapping clips. Leave empty to use the clip length.",
     "--ratio": "Shape of the finished clip. 9:16 is upright for Shorts, Reels and TikTok, 1:1 is square, "
                "16:9 is normal widescreen.",
-    "--height": "Height of the finished clip in pixels. 1920 with 9:16 gives the standard 1080 x 1920. "
-                "A smaller number makes smaller files.",
+    "--height": "Size of the finished clip in pixels, counted on its longer side. 1920 with 9:16 gives the standard "
+                "1080 x 1920, and with 16:9 gives 1920 x 1080. A smaller number makes smaller files.",
     "--crf": "Trade between picture quality and file size. 18 is close to the original, 23 is the usual balance, "
              "28 is small and soft.",
-    "--cam": "Where the streamer's facecam goes when it is a small box on top of a game: its own panel on top "
-             "or at the bottom. Off keeps a single picture, cropped from the middle, or around the streamer "
-             "when their face fills the frame.",
+    "--cam": "Where the streamer's facecam goes when it is a small box on top of a game: its own panel above or "
+             "below the game, or over the game in a corner so the game fills the whole clip. Off keeps a single "
+             "picture, cropped from the middle, or around the streamer when their face fills the frame.",
+    "--cam-corner": "The corner of the clip the cam sits in when it is over the game. The title line and the logo "
+                    "move out of its way.",
+    "--cam-size": "How wide the cam is over the game, as a part of the clip's width. 0.34 is about a third.",
     "--face-share": "How tall the cam panel is, as a part of the whole clip, when the face is found on its own. "
                     "0.33 gives it a third. A stream with a cam box set in its Cam & shape editor uses that instead.",
     "--face-zoom": "How tightly the cam panel is cropped around the face. 4 shows about four face widths. "
@@ -189,8 +192,16 @@ def number(value, low, high, whole=False):
     return int(n) if whole else n
 
 
-def shape_values(cam, ratio, game=None, share=None):
-    """Areas ([x, y, w, h] shares of the frame, or None), a shape ("9:16", or None) and a cam panel height, checked."""
+LOOK = ("cam", "game", "share", "ratio", "mode", "corner", "size")  # what the cam editor sets for one stream
+
+
+def shape_values(look):
+    """The cam editor's choices for one stream, checked. None means not set by hand: face detection, the middle,
+    the cam box's shape, the settings' shape, mode, corner and size.
+
+    cam, game: areas as [x, y, w, h] shares of the frame. share: cam panel height. ratio: "9:16", "21:9", "1.91:1".
+    mode: top, bottom, over or off. corner: tl, tr, bl or br. size: the cam's width over the game.
+    """
     def area(value):
         if value is None:
             return None
@@ -204,19 +215,19 @@ def shape_values(cam, ratio, game=None, share=None):
             raise ValueError("area") from None
         return value
 
-    cam, game = area(cam), area(game)
-    if share is not None:
-        try:
-            share = watcher.share(str(float(share)))
-        except (argparse.ArgumentTypeError, ValueError):
-            raise ValueError("share") from None
-    if ratio is not None:
-        try:
-            watcher.ratio(str(ratio))
-        except argparse.ArgumentTypeError:
-            raise ValueError("ratio") from None
-        ratio = str(ratio)
-    return cam, ratio, game, share
+    out = {"cam": area(look.get("cam")), "game": area(look.get("game"))}
+    try:
+        share, ratio, size = look.get("share"), look.get("ratio"), look.get("size")
+        out["share"] = None if share is None else watcher.share(str(float(share)))
+        out["ratio"] = None if ratio is None else (watcher.ratio(str(ratio)), str(ratio).strip())[1]
+        out["size"] = None if size is None else watcher.cam_size(str(float(size)))
+    except (argparse.ArgumentTypeError, ValueError):
+        raise ValueError("look") from None
+    for key, allowed in (("mode", ("top", "bottom", "off", "over")), ("corner", ("tl", "tr", "bl", "br"))):
+        if look.get(key) not in (None, *allowed):
+            raise ValueError(key)
+        out[key] = look.get(key)
+    return out
 
 
 def clip_source(name):
@@ -234,8 +245,7 @@ class Stream:
         self.channel, self.kick, self.min, self.factor = channel, kick, minimum, factor
         self.proc, self.stopping, self.forced, self.exit = None, False, False, None
         self.stats, self.history, self.clips, self.last = None, [], 0, ""
-        # set by hand in the cam editor; None means face detection, the middle, the box's shape, the shared shape
-        self.cam, self.game, self.share, self.ratio = None, None, None, None
+        self.look = dict.fromkeys(LOOK)  # set by hand in the cam editor; None means follow the settings
         self.frame, self.frames = None, 0  # newest still from watcher.py, and how many answers came
 
     def public(self):
@@ -243,7 +253,7 @@ class Stream:
             "id": self.id, "channel": self.channel, "kick": self.kick, "min": self.min, "factor": self.factor,
             "running": self.proc is not None, "stopping": self.stopping, "exit": self.exit,
             "stats": self.stats, "history": self.history, "clips": self.clips, "last": self.last,
-            "cam": self.cam, "game": self.game, "share": self.share, "ratio": self.ratio,
+            **self.look,
         }
 
     def tell(self, line):
@@ -280,15 +290,12 @@ class Board:
             try:  # one damaged row must not cost the rows after it
                 if not self.add(f"{'kick.com' if row['kick'] else 'twitch.tv'}/{row['channel']}", row["min"],
                                 row["factor"], keep=False):
-                    stream = list(self.streams.values())[-1]
-                    stream.cam, stream.ratio, stream.game, stream.share = shape_values(
-                        row.get("cam"), row.get("ratio"), row.get("game"), row.get("share"))
+                    list(self.streams.values())[-1].look = shape_values(row)
             except (KeyError, TypeError, ValueError, AttributeError):
                 pass
 
     def save(self):
-        streams = [{"channel": s.channel, "kick": s.kick, "min": s.min, "factor": s.factor, "cam": s.cam, "game": s.game,
-                    "share": s.share, "ratio": s.ratio}
+        streams = [{"channel": s.channel, "kick": s.kick, "min": s.min, "factor": s.factor, **s.look}
                    for s in self.streams.values()]
         fresh = SAVED.with_name(SAVED.name + ".tmp")
         try:  # written beside the file and swapped in, so a kill half way never leaves a broken board
@@ -365,14 +372,18 @@ class Board:
             # started apart from our terminal: a Ctrl+C or a closed window here must not hit it as a signal;
             # it is stopped through its stdin alone, and losing that stdin stops it cleanly
             own = [f"--min={stream.min}", f"--factor={stream.factor:g}"]
-            own += [f"--cam-box={','.join(f'{v:g}' for v in stream.cam)}"] if stream.cam else []
-            own += [f"--game-box={','.join(f'{v:g}' for v in stream.game)}"] if stream.game else []
-            own += [f"--cam-share={stream.share:g}"] if stream.share else []
-            own += [f"--ratio={stream.ratio}"] if stream.ratio else []
+            look, areas = stream.look, lambda a: ",".join(f"{v:g}" for v in a)
+            own += [f"--cam-box={areas(look['cam'])}"] if look["cam"] else []
+            own += [f"--game-box={areas(look['game'])}"] if look["game"] else []
+            own += [f"--cam-share={look['share']:g}"] if look["share"] else []
+            own += [f"--ratio={look['ratio']}"] if look["ratio"] else []
+            own += [f"--cam={look['mode']}"] if look["mode"] else []
+            own += [f"--cam-corner={look['corner']}"] if look["corner"] else []
+            own += [f"--cam-size={look['size']:g}"] if look["size"] else []
+            mine = {a.partition("=")[0] for a in own}  # what this stream sets itself wins over the shared settings
             stream.proc = subprocess.Popen(
                 [sys.executable, "-u", str(HERE / "watcher.py"), "--stdin-control", link, *own,
-                 *(a for a in self.shared if a.partition("=")[0] not in PER_STREAM
-                   and not (stream.ratio and a.startswith("--ratio=")) and a != "--upload")],  # uploads: reviewed
+                 *(a for a in self.shared if a.partition("=")[0] not in {*PER_STREAM, *mine} and a != "--upload")],
                 cwd=HERE, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, errors="replace", **watcher.APART,
             )
@@ -431,27 +442,32 @@ class Board:
             except subprocess.TimeoutExpired:
                 last_resort()  # a stopping watcher takes a terminate as its second signal and quits with its helpers
 
-    def shape(self, stream_id, cam, ratio, game=None, share=None):
-        """Set a stream's cam area, game area, cam panel height and clip shape by hand.
+    def shape(self, stream_id, look):
+        """Set a stream's cam and game areas, cam panel, cam mode and clip shape by hand.
 
         A running stream uses them from its next clip.
         """
         try:
-            cam, ratio, game, share = shape_values(cam, ratio, game, share)
-        except (ValueError, TypeError):
-            return "The areas must lie inside the picture, the cam panel 0.12 to 0.6 high, and the shape like 9:16"
+            look = shape_values(look)
+        except (ValueError, TypeError, AttributeError):
+            return ("The areas must lie inside the picture, the cam panel 0.12 to 0.6 high, the cam 0.15 to 0.6 wide, "
+                    "and the shape like 9:16 or 21:9")
         with self.lock:
             stream = self.streams.get(stream_id)
             if not stream:
                 return "That stream is not on the board"
-            stream.cam, stream.ratio, stream.game, stream.share = cam, ratio, game, share
+            stream.look = look
             self.save()
             if stream.proc:
-                shared = next((a.partition("=")[2] for a in self.shared if a.startswith("--ratio=")), "9:16")
-                stream.tell("cam=" + (",".join(f"{v:g}" for v in cam) if cam else "auto"))
-                stream.tell("game=" + (",".join(f"{v:g}" for v in game) if game else "auto"))
-                stream.tell(f"share={share:g}" if share else "share=auto")
-                stream.tell(f"ratio={ratio or shared}")
+                areas = lambda a: ",".join(f"{v:g}" for v in a) if a else "auto"
+                stream.tell("cam=" + areas(look["cam"]))
+                stream.tell("game=" + areas(look["game"]))
+                stream.tell(f"share={look['share']:g}" if look["share"] else "share=auto")
+                # what is not set by hand goes back to the shared settings
+                stream.tell(f"ratio={look['ratio'] or self.setting('--ratio', '9:16')}")
+                stream.tell(f"mode={look['mode'] or self.setting('--cam', 'top')}")
+                stream.tell(f"corner={look['corner'] or self.setting('--cam-corner', 'tr')}")
+                stream.tell(f"camsize={look['size'] or self.setting('--cam-size', '0.34')}")
 
     @staticmethod
     def peek(stream):
@@ -1004,7 +1020,7 @@ def make_server(port=0, lan_key=None):
             elif self.path == "/api/tune":
                 error = board.tune(stream_id, body.get("min"), body.get("factor"))
             elif self.path == "/api/shape":
-                error = board.shape(stream_id, body.get("cam"), body.get("ratio"), body.get("game"), body.get("share"))
+                error = board.shape(stream_id, {key: body.get(key) for key in LOOK})
             elif self.path == "/api/shared":
                 board.remember(shared or [])
             elif self.path == "/api/find":
