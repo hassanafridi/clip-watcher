@@ -1866,6 +1866,41 @@ with tempfile.TemporaryDirectory() as folder:
         podcast.FOLDER, podcast.LLM_FILE = real_folder, real_llm
         httpd.shutdown()
 
+# --- descriptions carry no http:// or https://: YouTube blocks links there until a channel is eligible ---
+class Answer:
+    ok, status_code, text, headers = True, 200, "", {"Location": "http://upload"}
+
+    def json(self):
+        return {"id": "vid9"}
+
+
+class Session:
+    sent = []
+
+    def post(self, url, json=None, **kw):
+        Session.sent.append(json)
+        return Answer()
+
+    def put(self, *a, **kw):
+        return Answer()
+
+
+with tempfile.TemporaryDirectory() as folder:
+    clip = Path(folder) / "ohnepixel_20261120_120000.mp4"
+    clip.write_bytes(b"x")
+    clip.with_suffix(".srt").write_text("1\n00:00:00,000 --> 00:00:01,000\nsee https://example.com now\n", encoding="utf-8")
+    real_youtube, upload.youtube = upload.youtube, lambda profile="": Session()
+    try:
+        upload.publish(clip, "twitch.tv/ohnepixel", say=lambda t: None)
+        upload.publish(clip, "youtube.com/watch?v=abc", say=lambda t: None, channel="Night Talk", description="more at http://x.org {text}")
+    finally:
+        upload.youtube = real_youtube
+    first, second = (b["snippet"]["description"] for b in Session.sent)
+    assert "Clipped from twitch.tv/ohnepixel\n" in first and "http" not in first, first
+    assert "example.com now" in first, "the words stay, only the scheme goes"
+    assert "http" not in second and "Clipped from youtube.com/watch?v=abc" in second and "more at x.org" in second, second
+assert upload.unlinked("a https://b.c and http://d.e") == "a b.c and d.e"
+
 # the two lines of watcher.py that the board reads must stay in the form it expects
 stat = gui.STAT.match("[xqc] 1805s | Msgs: 130 | Median: 128.5 | Threshold: 325 | recording")
 assert stat and stat.groups() == ("1805", "130", None, "128.5", "325", "recording"), stat

@@ -61,6 +61,12 @@ def hashtags(template, source, game="", channel=None):
     return " ".join(tags[:15])
 
 
+def unlinked(text):
+    """The text without http:// or https://: YouTube blocks links in descriptions until the channel is eligible, so
+    twitch.tv/name is written bare."""
+    return re.sub(r"https?://", "", text)
+
+
 def profile_dir(profile=""):
     """Where a channel keeps its YouTube sign-in: its own folder, or this one for the default channel."""
     return HERE / "profiles" / profile if profile else HERE
@@ -109,7 +115,7 @@ def publish(clip, source, privacy="private", title=TITLE, description=DESCRIPTIO
     body = {
         "snippet": {
             "title": title,
-            "description": f"{description}\n\nClipped from https://{source}\n{hashtags(tags, source, game, channel)}"[:4900],
+            "description": unlinked(f"{description}\n\nClipped from {source}\n{hashtags(tags, source, game, channel)}")[:4900],
             "categoryId": "20",
         },
         "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False},
