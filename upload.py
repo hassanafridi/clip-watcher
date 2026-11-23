@@ -44,14 +44,14 @@ def game_tag(game):
     return GAME_TAGS.get(game.lower()) or "".join(w[:1].upper() + w[1:] for w in re.sub(r"[^\w ]", " ", game).split())
 
 
-def hashtags(template, source, game=""):
+def hashtags(template, source, game="", channel=None):
     """The hashtags of an upload: the template filled in ({channel}, {game}, {site}), each once, #Shorts last.
 
     YouTube ignores every hashtag of a video that has more than 60, and counts piles of them as spam, so at most
     15 are kept.
     """
-    site, _, channel = source.partition("/")
-    words = (template or "").format(channel=re.sub(r"\W", "", channel), site=site.split(".")[0],
+    site, _, named = source.partition("/")
+    words = (template or "").format(channel=re.sub(r"\W", "", channel or named), site=site.split(".")[0],
                                      game=game_tag(game)).split()
     tags = []
     for word in words + ["#Shorts"]:
@@ -99,17 +99,17 @@ def youtube(profile=""):
 
 
 def publish(clip, source, privacy="private", title=TITLE, description=DESCRIPTION, say=print, tags=HASHTAGS,
-            thumbnail=None, game="", profile=""):
+            thumbnail=None, game="", profile="", channel=None):
     """Upload clip (an .mp4 with an .srt beside it) and return the YouTube video id.
 
     thumbnail: an image to set as the video's thumbnail afterwards; YouTube may not use it on a Short.
     """
     clip = Path(clip)
-    title, description = describe(transcript(clip.with_suffix(".srt")), source.rsplit("/", 1)[-1], title, description)
+    title, description = describe(transcript(clip.with_suffix(".srt")), channel or source.rsplit("/", 1)[-1], title, description)
     body = {
         "snippet": {
             "title": title,
-            "description": f"{description}\n\nClipped from https://{source}\n{hashtags(tags, source, game)}"[:4900],
+            "description": f"{description}\n\nClipped from https://{source}\n{hashtags(tags, source, game, channel)}"[:4900],
             "categoryId": "20",
         },
         "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False},

@@ -7,6 +7,9 @@ openai-whisper>=20231117
 # Local face detection for the vertical layout
 opencv-python-headless>=5.0
 
+# Fetching videos from YouTube and other sites for podcast clips
+yt-dlp>=2024.1.1
+
 # YouTube Shorts upload (only used with --upload)
 google-auth-oauthlib>=1.2.0
 

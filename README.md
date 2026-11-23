@@ -4,16 +4,17 @@ Records live Twitch and Kick streams, watches their chats, and cuts a vertical c
 
 ## Install
 
-Linux and macOS:
+You need Python 3.10 or newer; the installer does the rest, on Windows, macOS and Linux:
 
-    chmod +x setup.sh watch.sh
-    ./setup.sh
+    python install.py
 
-Windows:
+It asks where to install (default: a `clip-watcher` folder in your home folder; `--dir <folder>` puts it anywhere), copies the program there, builds its own virtual environment, installs the packages, finds ffmpeg or fetches a private copy into the install folder, downloads the face and speech models, adds a desktop shortcut or menu entry, and opens the board in your browser. Without the program files beside it, `install.py` downloads them from GitHub, so that one file is all a new computer needs. Also: `--source <folder, zip or https link>` to install from somewhere else, `--yes` to never ask, `--no-models`, `--no-shortcut`, `--no-start`, `--gpu` (Linux: torch with GPU support; the default is the small CPU build), `--ffmpeg download` (keep a private ffmpeg even if one is installed).
 
-    setup.bat
+Run `python install.py` again to update: program files and packages are replaced; your clips, channels, streams, sign-ins and settings (`clips/`, `profiles/`, `podcasts/`, `streams.json`, `token.json`, `client_secret.json`, `llm.json`, `chat_filter.txt`, `brand/`) are never touched. `python install.py --check` tests an install and changes nothing.
 
-Both install ffmpeg, create a virtual environment in `venv/`, and install `requirements.txt`. To do it by hand you need Python 3.10+, ffmpeg and ffprobe on PATH, and `pip install -r requirements.txt`.
+The program itself is a page in your browser, served from the computer it runs on only: open it with `watch.bat` or `./watch.sh` in the install folder, or the shortcut.
+
+`setup.bat` and `setup.sh` still work for a checkout you run in place. To do it by hand: Python 3.10+, ffmpeg and ffprobe on PATH, and `pip install -r requirements.txt`.
 
 ## Use
 
@@ -30,11 +31,27 @@ With no arguments it opens the streams board in your browser, served from this m
 - Start and stop each stream on its own, or all together. Stop lets a stream finish the clips it has already cut. While it does, its button reads "Quit now"; after asking, that drops those clips and leaves at once. "Stop all" never does that.
 - "Settings for every stream" holds everything else: clip length, shape, cam placement, quality, subtitles, upload. A stream uses them from its next start. Hover over a setting for a longer explanation.
 - **Clips to review**: every finished clip waits on the board. Watch it there, fix the title and description if you like, pick who can see it, and press Upload, or Delete it. The board never uploads on its own, even with the upload setting on; that setting is only for runs in a terminal. Check each clip for nudity, hate or anything else YouTube removes before uploading. Open shows the clip large with everything beside it: play or scrub to a moment, then 'Teaser from this moment' or 'Thumbnail from this frame'. Per clip you can also move the teaser to another moment (Remake teaser), edit the hashtags, and make a thumbnail: pick a frame on the slider, type a few words, Make thumbnail (big yellow and white Anton letters with a heavy outline; the font is in fonts/ under the SIL Open Font License); it goes out with the upload (custom Shorts thumbnails need a verified YouTube account, and YouTube may still show its own frame on a Short). Uploaded clips move to clips/uploaded/ with their subtitles and thumbnail, ready to post elsewhere by hand; 'Delete all waiting' clears out the rest.
+- "Clip now" on a running row cuts a clip of the last seconds at once, without waiting for a chat spike.
+- Each row can be made for a channel (see Channels below) and has its own cam and shape settings.
 - The board, the per-stream values and the settings are remembered in `streams.json`.
 
 **On your phone:** start the board with `watch.bat --lan` (`./watch.sh --lan`). The window and the board's Log then show a link like `http://192.168.1.20:8791/?key=...`; open it on a phone on the same Wi-Fi to review, edit and upload clips there. The key is kept in `phone_key.txt` (delete that file to make a new link); without it the board refuses other devices. Windows asks once whether Python may use the network: allow it for private networks. Plain `watch.bat` keeps the board on this computer only.
 
 A browser page cannot start a recording by itself, so opening `gui.html` on its own only works while clip-watcher is running: then it jumps straight to the board, otherwise it tells you to start `watch.bat` first.
+
+### Channels
+
+A channel is a look and a YouTube account, so one board can serve several channels, and anyone can set up their own: its name and handle, intro and outro (the board can draw them), logo, hashtags, title and description templates, thumbnail colours, who can see uploads, and its own Google sign-in (an optional own `client_secret.json`). Make one under Channels on the board and pick it on a stream's row or a podcast. A stream or video on the default channel uses the settings at the bottom of the page and the Google account in `token.json`. A channel lives in `profiles/<name>/`.
+
+### Podcasts and videos
+
+Clip a recorded video, such as a podcast, from a YouTube (or other site) link or a video file on this computer. Add it under Podcasts and videos; the board downloads it with yt-dlp (up to 1080p), gets the captions YouTube already has or listens with Whisper, and looks for moments worth a clip:
+
+- **Loud spots**: laughter and raised voices, found from the sound alone.
+- **A model** (optional, "Moment finder"): reads the transcript and picks the moments that work on their own, with a title and a reason. Use your own key for Claude, OpenAI, Gemini or Qwen, or a model on this computer through Ollama or a llama.cpp server. The key is kept in `llm.json` and is never shown on the page again. With a model on the internet, the words of each video are sent to that provider to pick moments; with Ollama or llama.cpp nothing leaves your computer. Local models can need minutes to load and answer.
+- **By hand**: play the video, press "From player" at the start and at the end, and Add moment (8 to 90 seconds).
+
+"Make clip" cuts a moment into a finished clip that lands in Clips to review like any other, credited to the name you gave the podcast. Layouts: one panel per person (up to three faces found in the picture, stacked), the whole picture over a blurred copy of itself, or a centre crop. Moments, the transcript and the downloaded video are kept in `podcasts/<name>/`; Remove deletes them. Only download videos you have the right to use.
 
 ### Terminal
 
@@ -82,6 +99,7 @@ Kick lists its live channels oldest first and has no "most watched" order, so cl
 
 ## Where things go
 
+- `profiles/` holds one folder per channel (settings, sign-in, files), `podcasts/` one per video, `llm.json` the moment finder's settings.
 - `clips/` holds the finished `.mp4` and `.srt` files. Nothing else is ever written there. Kick clips carry `-kick` after the channel name.
 - `rec/` holds the working recordings, in one `run-...` folder per running clip-watcher. They are temporary: every `--rotate-mins` (60) a fresh file takes over, old and new run side by side for `--overlap-secs` (60) so a clip at the switch is still whole, and the old file is deleted as soon as no clip needs it. One stream holds roughly 3 to 4 GB at 1080p. When clip-watcher stops it removes its folder; if it was killed, the next start removes the folder it left.
 - `--keep-rec` keeps every recording instead, directly in `rec/` under names the clean-up never touches. A long stream then fills the disk at roughly 3 to 4 GB per hour.
@@ -109,7 +127,9 @@ Kick lists its live channels oldest first and has no "most watched" order, so cl
 | `--ratio` | 9:16 | shape of the clip, e.g. `1:1`, `4:5`, `16:9` |
 | `--height` | 1920 | clip height in pixels; the width follows from the ratio |
 | `--crf` | 23 | picture quality, lower is better and bigger |
-| `--cam` | top | facecam panel on `top`, at the `bottom`, or `off` |
+| `--cam` | top | facecam panel on `top`, at the `bottom`, `over` the game in a corner, `off`, `faces` (one panel per person) or `fit` (whole picture over a blur) |
+| `--cam-corner`, `--cam-size` | tr, 0.34 | corner and width of the cam when it is `over` the game |
+| `--profile` | none | a channel's look, hashtags and YouTube sign-in, from `profiles/<name>/` |
 | `--face-share` | 0.33 | share of the clip height the facecam panel gets |
 | `--face-zoom` | 4 | how tight the facecam crop is, in face widths |
 | `--big-face` | 0.12 | a face wider than this share of the picture fills the clip instead |
@@ -128,6 +148,9 @@ Clips are H.264 video with AAC sound. A face detector looks for the streamer in 
 - streamer fills the frame: one crop centred on the face
 - no face found: plain centre crop
 - `--cam off` or a landscape ratio: one crop, centred on the face when it fills the frame (see `--big-face`), otherwise the middle
+- `--cam over`: the game fills the whole clip and the cam sits over it in a corner, like a green screen without the cut-out, so the top is not wasted
+- `--cam faces`: up to three faces in the picture, one panel each, stacked in the order they sit; `--cam fit`: the whole picture, whatever its shape, over a blurred copy that fills the clip
+- `--ratio` takes any shape such as `21:9` or `1.91:1`; the board's cam editor also has a free shape that follows the Game box
 
 ### Cam, game and shape per stream
 
@@ -186,10 +209,10 @@ To upload a clip by hand:
 ## Notes
 
 - Clip streamers who allow it.
-- The subtitles (Whisper) and the face detector are small models that run locally; nothing is sent anywhere.
+- The subtitles (Whisper) and the face detector are small models that run locally; nothing is sent anywhere. The one exception is the moment finder for podcasts when it is set to a provider on the internet: then the video's words go to that provider.
 - Twitch chat is read anonymously over TLS on port 443 and reconnects on its own.
 - Kick chat is read from the public message history, which Kick refreshes every 10 seconds. Messages are counted by their own timestamps about 20 seconds late, and clips are timed to match, so Kick clips appear a little later than Twitch ones.
 - During an ad break on your own connection nothing is recorded. A spike in that time is skipped, and a clip right after it starts where the recording picked up again.
 - If clip-watcher is killed outright, its recorders are ended with it on Windows and Linux. On macOS they can run on until the stream ends.
 - The board only answers requests from this machine that carry a secret built into the page it serves, so other websites cannot start or stop recordings.
-- `python test_watch.py` runs the self-check.
+- `python test_watch.py` and `python test_podcast.py` run the self-checks.

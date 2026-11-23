@@ -3,6 +3,7 @@ import io
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -188,6 +189,33 @@ assert tall["size"][1] <= 0.4 * 1920 + 2, "a tall cam is made narrower, not tall
 wide_clip = over_options("br", ratio=16 / 9)
 assert (wide_clip.width, wide_clip.height) == (1920, 1080)
 assert "overlay=" in watcher.layout(1920, 1080, None, wide_clip, box=(100, 700, 600, 340)), "also on a wide clip"
+
+# --- podcasts: one panel per person, or the whole picture over its own blur ---
+two = watcher.steady_faces([(300, 400, 200, 200)] * 20 + [(1300, 420, 190, 190)] * 20, 30, 3)
+assert two == [(300, 400, 200, 200), (1300, 420, 190, 190)] or two == [(1300, 420, 190, 190), (300, 400, 200, 200)], two
+assert len(watcher.steady_faces([(300, 400, 200, 200)] * 20 + [(1300, 420, 190, 190)] * 3, 30, 3)) == 1, "a passer-by is not a guest"
+assert watcher.steady_faces([(300, 400, 200, 200)] * 20, 30, 3) == [(300, 400, 200, 200)]
+people = over_options(cam="faces")
+assert people.face_h == 0 and over_options(cam="fit").face_h == 0
+people.faces = [(300, 400, 200, 200), (900, 420, 200, 200), (1500, 410, 200, 200)]
+graph = watcher.layout(1920, 1080, None, people)
+assert "split=3" in graph and "vstack=inputs=3" in graph and graph.endswith("[v]"), graph
+assert watcher.layout(1920, 1080, None, over_options(cam="faces")).count("boxblur") == 1, "no faces found: the fitted picture"
+people.faces = [(300, 400, 200, 200)]
+assert "boxblur" in watcher.layout(1920, 1080, None, people), "one face alone is not a split"
+assert watcher.layout(1920, 1080, None, over_options(cam="fit", ratio=1)).startswith("[0:v]split[a][b]")
+if shutil.which("ffmpeg"):
+    sample = Path(tempfile.mkdtemp()) / "talk.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=1920x1080:r=25:d=2", "-pix_fmt", "yuv420p", sample], check=True)
+    for mode, faces in (("faces", [(300, 400, 200, 200), (1300, 420, 190, 190)]), ("fit", None), ("faces", None)):
+        o = over_options(cam=mode)
+        o.faces = faces
+        made = sample.with_name(f"{mode}{len(faces or [])}.mp4")
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", sample, "-filter_complex", watcher.layout(1920, 1080, None, o, "[0:v]"),
+                        "-map", "[v]", made], check=True)
+        size = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", made],
+                              capture_output=True, text=True, check=True).stdout.strip()
+        assert size == "1080,1920", (mode, size)
 # the title line goes under a cam at the top, and the logo moves to the other top corner
 boxed = lambda corner: (lambda o: (setattr(o, 'cam_box', (0.05, 0.6, 0.3, 0.3)), o)[1])(over_options(corner))
 top_left = watcher.edit(1920, 1080, None, boxed('tl'), 0, 30, 20, '60/1', True, extras=[(1, 'logo', False, 0)])
@@ -1001,7 +1029,8 @@ with tempfile.TemporaryDirectory() as folder:
     groups = call("/api/options")[1]["groups"]
     offered = {o["flag"] for g in groups for o in g["options"]}
     flags = {a.option_strings[0] for a in watcher.build_parser()._actions if a.option_strings}
-    assert offered == flags - {"-h", "--stdin-control", "--category", "--top", "--cam-box", "--game-box", "--cam-share", "--profile"}, "the page offers the rest"
+    assert offered == flags - {"-h", "--stdin-control", "--category", "--top", "--cam-box", "--game-box", "--cam-share", "--profile",
+                               "--from-file", "--start", "--end", "--peak", "--name", "--source"}, "the page offers the rest"
     assert all(o["detail"] and o["label"] for g in groups for o in g["options"]), "every option explains itself"
 
     # add: several at once, a link names its site, plain names follow the Kick box
@@ -1258,7 +1287,7 @@ with tempfile.TemporaryDirectory() as folder:
 
     upload.signed_in = lambda profile="": True
 
-    def fake_publish(clip, source, privacy, title, description, say=print, tags="", thumbnail=None, game="", profile=""):
+    def fake_publish(clip, source, privacy, title, description, say=print, tags="", thumbnail=None, game="", profile="", channel=None):
         sent.append((Path(clip).name, source, privacy, title, description, tags, thumbnail and Path(thumbnail).name))
         say("thumbnail set")
         return "abc123"
@@ -1646,6 +1675,185 @@ with tempfile.TemporaryDirectory() as folder:
     finally:
         gui.brand.make, upload.sign_in, upload.publish, subprocess.Popen = real_brand_make, real_sign_in, real_publish, real_popen
         gui.HERE, upload.HERE, upload.signed_in = real_here, real_up_here, real_signed
+        httpd.shutdown()
+
+# --- podcasts: videos on the board, their moments, clips cut out of them, the model settings, clip now ---
+import podcast
+
+with tempfile.TemporaryDirectory() as folder:
+    real_here, real_up_here, real_signed, real_folder, real_llm = gui.HERE, upload.HERE, upload.signed_in, podcast.FOLDER, podcast.LLM_FILE
+    gui.HERE = upload.HERE = Path(folder)
+    gui.SAVED, gui.CLIPS = Path(folder) / "streams.json", Path(folder) / "clips"
+    gui.CLIPS.mkdir()
+    podcast.FOLDER, podcast.LLM_FILE = Path(folder) / "podcasts", Path(folder) / "llm.json"
+    httpd, token = gui.make_server()
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    board = httpd.board
+
+    def ask(path, body=None, headers=None):
+        data = None if body is None else json.dumps(body).encode()
+        request = urllib.request.Request(f"http://127.0.0.1:{httpd.server_port}{path}", data=data, headers={"X-Token": token, **(headers or {})})
+        try:
+            with urllib.request.urlopen(request, timeout=20) as r:
+                return r.status, json.loads(r.read()) if "json" in r.headers["Content-Type"] else r.read()
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read() or b"{}")
+
+    def waited(what, until, seconds=60):
+        deadline = time.time() + seconds
+        while not until():
+            assert time.time() < deadline, what
+            time.sleep(0.05)
+
+    real_popen, real_check, real_transcribe = subprocess.Popen, podcast.check_llm, podcast.transcribe
+    podcast.transcribe = lambda *args, **kw: []  # no listening for speech in a test
+    try:
+        # the model settings: kept here, the key never sent back
+        assert ask("/api/llm")[1]["llm"] is None and "claude" in ask("/api/llm")[1]["presets"]
+        assert ask("/api/llm/save", {"preset": "nope", "base": "http://x", "model": "m"})[0] == 400
+        assert ask("/api/llm/save", {"preset": "claude", "base": "https://api.anthropic.com", "model": "m1", "key": "sk-keep-me"})[0] == 200
+        status, body = ask("/api/llm")
+        assert body["llm"] == {"preset": "claude", "base": "https://api.anthropic.com", "model": "m1", "has_key": True}
+        assert "sk-keep-me" not in json.dumps(body)
+        tried = []
+        podcast.check_llm = lambda cfg: tried.append(cfg) or "ready"
+        assert ask("/api/llm/test", {"preset": "claude", "base": "https://api.anthropic.com", "model": "m2", "key": ""})[1] == {"reply": "ready"}
+        assert tried[0]["key"] == "sk-keep-me" and tried[0]["model"] == "m2", "a test without a typed key uses the kept one"
+        assert ask("/api/llm/test", {"preset": "claude", "base": "", "model": "m"})[0] == 400
+        podcast.check_llm = real_check
+        assert ask("/api/llm/forget", {})[0] == 200 and ask("/api/llm")[1]["llm"] is None
+
+        # a video from this computer: moments found without any model, from a shout in the sound
+        talk = Path(folder) / "talk.mp4"
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=black:s=320x180:r=10:d=150", "-f", "lavfi", "-i",
+                        "anoisesrc=d=150:a=0.02:r=16000", "-af", "volume='if(between(t,90,98),25,1)':eval=frame",
+                        "-c:v", "libx264", "-c:a", "aac", "-shortest", str(talk)], check=True)
+        for bad in ("", "nothing.mp4", "ftp://x/y", str(Path(folder))):
+            assert ask("/api/podcast/add", {"source": bad, "name": "x", "cam": "faces"})[0] == 400, bad
+        assert ask("/api/podcast/add", {"source": str(talk), "name": "x", "cam": "sideways"})[0] == 400
+        assert ask("/api/podcast/add", {"source": str(talk), "name": "x", "cam": "faces", "profile": "nothing"})[0] == 400
+        status, added = ask("/api/podcast/add", {"source": str(talk), "name": "Night Talk", "cam": "faces"})
+        assert status == 200 and added["id"].startswith("night-talk-"), added
+        pid = added["id"]
+        pods = lambda: {p["id"]: p for p in ask("/api/state")[1]["podcasts"]}
+        waited("moments", lambda: pods()[pid]["state"] != "working")
+        pod = pods()[pid]
+        assert pod["state"] == "ready" and abs(pod["duration"] - 150) < 1 and pod["name"] == "Night Talk", pod
+        assert len(pod["moments"]) == 1 and pod["moments"][0]["by"] == "loud" and pod["moments"][0]["start"] <= 95 <= pod["moments"][0]["end"], pod["moments"]
+        assert (podcast.FOLDER / pid / "moments.json").is_file() and (podcast.FOLDER / pid / "meta.json").is_file()
+        assert gui.Board().pods[pid].moments == pod["moments"], "a restart finds it again"
+
+        # marking by hand
+        mark = lambda **kw: ask("/api/podcast/moment", {"id": pid, "action": "save", **kw})
+        assert mark(start=10, end=40, title="My pick")[0] == 200
+        assert mark(start=10, end=14)[0] == 400 and mark(start=10, end=200)[0] == 400 and mark(start=50, end=40)[0] == 400
+        assert mark(start=100, end=160)[0] == 400, "past the end of the video"
+        assert mark(start="x", end=40)[0] == 400
+        mine = [m for m in pods()[pid]["moments"] if m["by"] == "you"]
+        assert len(mine) == 1 and mine[0]["peak"] == 25 and mine[0]["title"] == "My pick" and mine[0]["id"] == 2
+        assert [m["start"] for m in pods()[pid]["moments"]] == sorted(m["start"] for m in pods()[pid]["moments"])
+        assert mark(moment=2, start=12, end=44, peak=30, title="Changed")[0] == 200
+        assert [m for m in pods()[pid]["moments"] if m["id"] == 2][0]["peak"] == 30
+        assert ask("/api/podcast/moment", {"id": pid, "action": "delete", "moment": 2})[0] == 200
+        assert [m["id"] for m in pods()[pid]["moments"]] == [1]
+
+        # cutting a moment into a clip: one watcher.py run, a clip in the review list when it ends
+        class Child:
+            def __init__(self, lines, code):
+                self.stdout, self.code = iter(lines), code
+
+            def wait(self):
+                return self.code
+
+        launched = []
+
+        def fake_popen(command, **kw):
+            launched.append(command)
+            if len(launched) == 1:
+                return Child([f"[podcast] saved {gui.CLIPS / 'Night-Talk_20261123_100000.mp4'}\n", "RESULT x\n"], 0)
+            return Child(["[podcast] clip Night-Talk_x.mp4 failed: no room\n"], 1)
+
+        subprocess.Popen = fake_popen
+        made = []
+        board.first_thumbnail = lambda name, **kw: made.append(name)
+        assert ask("/api/podcast/clip", {"id": pid, "moment": 99})[0] == 400 and ask("/api/podcast/clip", {"id": "no", "moment": 1})[0] == 400
+        assert ask("/api/podcast/clip", {"id": pid, "moment": 1})[0] == 200
+        waited("clip made", lambda: list(pods()[pid]["making"].values())[0].get("state") != "making")
+        done = list(pods()[pid]["making"].values())[0]
+        assert done == {"state": "done", "clip": "Night-Talk_20261123_100000.mp4"}, done
+        command = launched[0]
+        assert command[:3] == [sys.executable, "-u", str(gui.HERE / "watcher.py")] and f"--from-file={talk}" in command
+        assert "--cam=faces" in command and "--name=Night Talk" in command and f"--start={pod['moments'][0]['start']}" in command
+        assert not any(a.startswith(("--min", "--factor", "--upload", "--stdin-control")) for a in command), command
+        waited("thumbnail", lambda: made == ["Night-Talk_20261123_100000.mp4"])
+        assert ask("/api/podcast/clip", {"id": pid, "moment": 1})[0] == 200
+        waited("clip failed", lambda: list(pods()[pid]["making"].values())[0].get("state") == "failed")
+        assert "no room" in list(pods()[pid]["making"].values())[0]["error"]
+        subprocess.Popen = real_popen
+
+        # a clip cut out of a podcast is credited to the podcast, not to a stream
+        clip = gui.CLIPS / "Night-Talk_20261123_100000.mp4"
+        clip.write_bytes(b"x")
+        clip.with_suffix(".json").write_text(json.dumps({"name": "Night Talk", "source": "youtube.com/watch?v=abc", "game": "",
+                                                          "profile": "", "teaser": 0, "teaser_from": 0, "spike": 3, "main": 30, "intro": 0}), encoding="utf-8")
+        listed = {c["name"]: c for c in ask("/api/clips")[1]["clips"]}["Night-Talk_20261123_100000.mp4"]
+        assert listed["channel"] == "Night Talk" and listed["source"] == "youtube.com/watch?v=abc", listed
+        assert listed["tags"] == "#NightTalk #youtube #clips #Shorts", listed["tags"]
+        sent = []
+        real_publish = upload.publish
+        upload.publish = lambda *a, **kw: sent.append((a[1], kw.get("channel"))) or "vid"
+        board.first_thumbnail = lambda name, **kw: None
+        upload.signed_in = lambda profile="": True
+        assert ask("/api/review/upload", {"name": clip.name, "title": "t", "privacy": "private"})[0] == 200
+        waited("upload", lambda: sent)
+        assert sent == [("youtube.com/watch?v=abc", "Night Talk")], sent
+        upload.publish, upload.signed_in = real_publish, real_signed
+
+        # the player: the video in parts, only for a page that holds the token
+        size = talk.stat().st_size
+        base = f"/api/podcast/video?id={pid}&t={token}"
+        status, whole = ask(base)
+        assert status == 200 and len(whole) == size
+        status, part = ask(base, headers={"Range": "bytes=0-9"})
+        assert status == 206 and part == whole[:10]
+        assert ask(base, headers={"Range": f"bytes={size - 5}-"})[1] == whole[-5:] and ask(base, headers={"Range": "bytes=-7"})[1] == whole[-7:]
+        assert ask(base, headers={"Range": f"bytes={size + 5}-"})[0] == 416
+        assert ask(f"/api/podcast/video?id={pid}&t=wrong")[0] == 403 and ask(f"/api/podcast/video?id={pid}")[0] == 403
+        assert ask(f"/api/podcast/video?id=nothing&t={token}")[0] == 404 and ask(f"/api/podcast/video?id=../x&t={token}")[0] == 404
+
+        # clip now: only for a stream that is running and has video
+        assert ask("/api/add", {"channels": "xqc", "min": 15, "factor": 2.5})[0] == 200
+        assert ask("/api/clip-now", {"id": "twitch-xqc"})[0] == 400, "not running"
+
+        class Pipe:
+            def __init__(self):
+                self.lines = []
+
+            def write(self, text):
+                self.lines.append(text)
+
+            def flush(self):
+                pass
+
+        stream = board.streams["twitch-xqc"]
+        stream.proc = SimpleNamespace(stdin=Pipe())
+        assert ask("/api/clip-now", {"id": "twitch-xqc"})[0] == 400, "no video yet"
+        stream.stats = {"video": True}
+        assert ask("/api/clip-now", {"id": "twitch-xqc"})[0] == 200 and stream.proc.stdin.lines == ["clip\n"]
+        stream.proc = None
+
+        # removing one takes its folder, but not while it is busy
+        pods_before = len(board.pods)
+        board.pods[pid].state = "working"
+        assert ask("/api/podcast/remove", {"id": pid})[0] == 400
+        board.pods[pid].state = "ready"
+        assert ask("/api/podcast/remove", {"id": pid})[0] == 200 and not (podcast.FOLDER / pid).exists() and len(board.pods) == pods_before - 1
+        assert ask("/api/podcast/remove", {"id": pid})[0] == 400
+        assert ask("/api/podcast/again", {"id": pid})[0] == 400
+    finally:
+        subprocess.Popen, podcast.check_llm, podcast.transcribe = real_popen, real_check, real_transcribe
+        gui.HERE, upload.HERE, upload.signed_in = real_here, real_up_here, real_signed
+        podcast.FOLDER, podcast.LLM_FILE = real_folder, real_llm
         httpd.shutdown()
 
 # the two lines of watcher.py that the board reads must stay in the form it expects

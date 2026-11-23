@@ -3,6 +3,8 @@
 # ./watch.sh <channel> [options]  runs in the terminal
 cd "$(dirname "$0")" || exit 1
 
+[ -d tools/ffmpeg/bin ] && export PATH="$PWD/tools/ffmpeg/bin:$PATH"
+
 # Activate virtual environment if present
 if [ -f venv/bin/activate ]; then
     source venv/bin/activate

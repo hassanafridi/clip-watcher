@@ -53,11 +53,11 @@ button, input, select { font: inherit; color: inherit; }
 .gate p { margin: 0 0 8px; color: var(--text-2); }
 .gate code { font: 13px/20px var(--mono); color: var(--text); background: var(--raised); padding: 2px 4px; border-radius: 4px; }
 
-input[type="text"], select {
+input[type="text"], input[type="password"], select {
   height: 36px; width: 100%; padding: 0 12px; background: var(--card); border: 1px solid var(--line-strong); border-radius: 8px;
   font-variant-numeric: tabular-nums; transition: border-color 150ms var(--ease);
 }
-input[type="text"]:hover, select:hover { border-color: var(--muted); }
+input[type="text"]:hover, input[type="password"]:hover, select:hover { border-color: var(--muted); }
 input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var(--fill); }
 button {
   height: 36px; padding: 0 16px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--card); cursor: pointer;
@@ -161,6 +161,30 @@ main { max-width: 1440px; margin: 0 auto; padding: 32px; display: grid; gap: 40p
 #editor .hint { color: var(--text-2); font-size: 13px; }
 #editor .big-thumb { width: 160px; aspect-ratio: 9 / 16; object-fit: cover; border-radius: 8px; border: 1px solid var(--line-strong); }
 #editor .close { position: absolute; top: 12px; right: 12px; }
+.podform { display: grid; grid-template-columns: minmax(200px, 2fr) minmax(120px, 1fr) minmax(140px, 1fr) minmax(180px, 1fr) auto;
+  gap: 8px 16px; align-items: end; margin: 0 0 16px; }
+.podform label, .mark label { display: block; color: var(--muted); font-size: 12px; line-height: 16px; margin-bottom: 4px; }
+.pods { border-top: 1px solid var(--line); }
+.pod { display: grid; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.pod .top { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(200px, 1.4fr) auto; gap: 8px 24px; align-items: center; }
+.pod .state, .moment .state { color: var(--text-2); font-size: 13px; }
+.pod .state.bad, .moment .state.bad { color: var(--tally); }
+.pod .acts button { height: 32px; padding: 0 12px; min-width: 0; }
+.pod .inside { display: grid; grid-template-columns: minmax(0, 420px) minmax(0, 1fr); gap: 16px 24px; align-items: start; }
+.pod .inside[hidden] { display: none; }
+.pod video { display: block; width: 100%; max-height: 360px; border-radius: 8px; background: var(--raised); }
+.pod .hint { margin: 8px 0 0; color: var(--text-2); font-size: 13px; }
+.moment { display: grid; grid-template-columns: 104px minmax(0, 1fr) auto; gap: 4px 16px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+.moment:first-child { border-top: 0; padding-top: 0; }
+.moment .when { font: 13px/20px var(--mono); font-variant-numeric: tabular-nums; }
+.moment .by { color: var(--muted); font-size: 12px; }
+.moment .acts button { height: 28px; padding: 0 10px; }
+.mark { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: end; margin-top: 12px; }
+.mark input[type="text"] { height: 32px; padding: 0 8px; }
+.mark .wide { flex: 1 1 200px; }
+.mark button { height: 32px; padding: 0 12px; }
+.mark > div:not(.pair):not(.wide) { width: 104px; }
+.mark .pair { align-self: end; }
 .chan { height: 24px; margin-top: 4px; padding: 0 6px; font-size: 12px; max-width: 200px; }
 .channel { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(200px, 1.4fr) auto; gap: 8px 16px; align-items: center;
   padding: 12px 0; border-top: 1px solid var(--line); }
@@ -169,19 +193,32 @@ main { max-width: 1440px; margin: 0 auto; padding: 32px; display: grid; gap: 40p
 .channel .acts button { height: 32px; padding: 0 12px; }
 #channel-dialog { width: min(760px, 96vw); max-width: none; max-height: 94vh; padding: 0; border: 1px solid var(--line-strong);
   border-radius: 12px; background: var(--card); color: var(--text); }
+#llm-dialog { width: min(760px, 96vw); max-width: none; max-height: 94vh; padding: 0; border: 1px solid var(--line-strong);
+  border-radius: 12px; background: var(--card); color: var(--text); }
 #channel-dialog::backdrop { background: rgba(0, 0, 0, 0.7); }
+#llm-dialog::backdrop { background: rgba(0, 0, 0, 0.7); }
 #channel-dialog .panel { padding: 20px; display: flex; flex-direction: column; gap: 4px; }
+#llm-dialog .panel { padding: 20px; display: flex; flex-direction: column; gap: 4px; }
 #channel-dialog h2 { margin: 0 0 8px; }
+#llm-dialog h2 { margin: 0 0 8px; }
 #channel-dialog h3 { margin: 16px 0 4px; font: 500 16px/20px var(--display); }
+#llm-dialog h3 { margin: 16px 0 4px; font: 500 16px/20px var(--display); }
 #channel-dialog .fieldline { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+#llm-dialog .fieldline { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
 #channel-dialog .fieldline label { color: var(--muted); font-size: 12px; line-height: 16px; }
+#llm-dialog .fieldline label { color: var(--muted); font-size: 12px; line-height: 16px; }
 #channel-dialog .fieldline input[type="color"] { width: 64px; height: 36px; padding: 2px; }
+#llm-dialog .fieldline input[type="color"] { width: 64px; height: 36px; padding: 2px; }
 #channel-dialog .colors { display: flex; flex-wrap: wrap; gap: 8px 24px; }
 #channel-dialog .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+#llm-dialog .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
 #channel-dialog .row button, #channel-dialog .fieldline button { height: 32px; padding: 0 12px; width: auto; }
+#llm-dialog .row button, #llm-dialog .fieldline button { height: 32px; padding: 0 12px; width: auto; }
 #channel-dialog .hint { margin: 0; color: var(--text-2); font-size: 13px; }
+#llm-dialog .hint { margin: 0; color: var(--text-2); font-size: 13px; }
 #channel-dialog .close { position: absolute; top: 12px; right: 12px; }
-@media (max-width: 860px) { .channel { grid-template-columns: minmax(0, 1fr); } }
+#llm-dialog .close { position: absolute; top: 12px; right: 12px; }
+@media (max-width: 860px) { .channel, .podform, .pod .top, .pod .inside, .moment { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 860px) {
   #editor .inside-editor { grid-template-columns: minmax(0, 1fr); overflow-y: auto; }
   #editor video { height: 60vh; max-width: 100%; justify-self: center; }
@@ -342,6 +379,28 @@ aside h2 { margin-bottom: 16px; }
     <div class="streams" id="streams"></div>
     <p class="empty" id="empty">No streams yet. Add a channel in the bar above. Every stream gets its own row with its own minimum, its own start and stop, and its chat counted live.</p>
   </section>
+  <section>
+    <div class="head">
+      <h2>Podcasts and videos</h2>
+      <div class="tools"><button id="llm-open">Moment finder</button></div>
+    </div>
+    <p class="help">Clip a recorded video: a YouTube or other video link, or a video file on this computer. The board finds the
+      moments worth a clip from loud spots and, with a model set up, from what is said. Pick the ones to cut, or mark your own with the player.
+      Clips go to Clips to review like any other.</p>
+    <p class="help" id="llm-state"></p>
+    <form class="podform" id="podform">
+      <div><label for="pod-source">Video link, or a file on this computer</label>
+        <input type="text" id="pod-source" autocomplete="off" spellcheck="false" placeholder="https://www.youtube.com/watch?v="></div>
+      <div><label for="pod-name">Name on the clips</label>
+        <input type="text" id="pod-name" autocomplete="off" maxlength="60" placeholder="My Podcast"></div>
+      <div><label for="pod-channel">Channel</label><select id="pod-channel"></select></div>
+      <div><label for="pod-cam">Layout</label><select id="pod-cam"></select></div>
+      <button type="submit" class="go">Add</button>
+    </form>
+    <div class="pods" id="pods"></div>
+    <p class="empty" id="pods-empty">No videos yet. Add a link above and the board downloads it and looks for moments.</p>
+  </section>
+  <dialog id="llm-dialog" aria-label="Moment finder"></dialog>
   <section>
     <div class="head">
       <h2>Channels</h2>
@@ -835,6 +894,7 @@ async function loadChannels() {
     defaultChannel = data.default;
   } catch (error) { return; }
   paintChannels();
+  fillPodChannel();
   for (const r of rows.values()) fillChannel(r);
   if (channels.some(c => c.signing_in) || defaultChannel.signing_in) setTimeout(loadChannels, 2000);
 }
@@ -989,13 +1049,192 @@ function openChannel(id) {
 }
 $("channel-new").onclick = () => openChannel("");
 
+// ---- podcasts: recorded videos, the moments found in them, and clips cut from them ----
+
+const POD_LAYOUTS = [["faces", "One panel per person"], ["fit", "Whole picture over a blur"], ["off", "Centre crop"]];
+const PROVIDERS = [["claude", "Claude (Anthropic)"], ["openai", "OpenAI"], ["gemini", "Gemini (Google)"], ["qwen", "Qwen (Alibaba)"],
+                   ["ollama", "Ollama, on this computer"], ["llamacpp", "llama.cpp server, on this computer"], ["custom", "Other, OpenAI compatible"]];
+const pods = new Map();
+let llm = null, llmPresets = {};
+const mmss = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+
+async function loadLlm() {
+  if (!$("pod-cam").options.length) $("pod-cam").append(...POD_LAYOUTS.map(option));
+  try {
+    const data = await api("/api/llm");
+    llm = data.llm;
+    llmPresets = data.presets;
+  } catch (error) { return; }
+  const name = llm && PROVIDERS.find(p => p[0] === llm.preset)[1];
+  $("llm-state").textContent = llm
+    ? `Moments come from loud spots and from ${name}, model ${llm.model}${llm.has_key ? ", key saved" : ""}.`
+    : "No model set up: only loud spots are found. A model reads what is said and picks the moments worth clipping.";
+}
+function fillPodChannel() {
+  const select = $("pod-channel"), keep = select.value;
+  select.replaceChildren(...[["", "Default channel"], ...channels.map(c => [c.id, c.name])].map(option));
+  select.value = channels.some(c => c.id === keep) ? keep : "";
+}
+function openLlm() {
+  const dialog = $("llm-dialog");
+  const note = el("p", {className: "hint", ariaLive: "polite"});
+  const preset = el("select", {id: "llm-preset"}, ...PROVIDERS.map(option));
+  const base = el("input", {type: "text", id: "llm-base", autocomplete: "off", spellcheck: false});
+  const model = el("input", {type: "text", id: "llm-model", autocomplete: "off", spellcheck: false});
+  const key = el("input", {type: "password", id: "llm-key", autocomplete: "off", spellcheck: false});
+  const setDefaults = () => { const d = llmPresets[preset.value] || {}; base.value = d.base || ""; model.value = d.model || ""; };
+  preset.value = llm ? llm.preset : "claude";
+  if (llm) { base.value = llm.base; model.value = llm.model; } else setDefaults();
+  const local = () => preset.value === "ollama" || preset.value === "llamacpp";
+  const hint = () => {
+    key.placeholder = llm && llm.has_key && llm.preset === preset.value ? "A key is saved; type to replace it, or - to remove it"
+      : local() ? "Not needed for a model on this computer" : "Paste your API key";
+  };
+  preset.onchange = () => { setDefaults(); hint(); };
+  hint();
+  const fields = () => ({preset: preset.value, base: base.value, model: model.value, key: key.value});
+  const test = el("button", {type: "button"}, "Test"), save = el("button", {className: "go"}, "Save"), forget = el("button", {}, "Remove model");
+  const close = el("button", {className: "close", ariaLabel: "Close"}, "Close");
+  const busy = async (button, text, work) => {
+    button.disabled = true;
+    note.textContent = text;
+    try { note.textContent = await work(); } catch (error) { note.textContent = error.message; }
+    button.disabled = false;
+  };
+  test.onclick = () => busy(test, "Asking the model", async () => `The model answered: ${(await api("/api/llm/test", fields())).reply}`);
+  save.onclick = () => busy(save, "Saving", async () => { await api("/api/llm/save", fields()); key.value = ""; await loadLlm(); hint(); return "Saved. The next video added, or Find again on one, uses it."; });
+  forget.onclick = () => busy(forget, "Removing", async () => { await api("/api/llm/forget", {}); await loadLlm(); hint(); return "Removed. Only loud spots are found."; });
+  close.onclick = () => dialog.close();
+  const row = (label, input) => el("div", {className: "fieldline"}, el("label", {htmlFor: input.id}, label), input);
+  dialog.replaceChildren(close, el("div", {className: "panel"},
+    el("h2", {}, "Moment finder"),
+    el("p", {className: "hint"}, "A model reads the transcript of a video and picks the moments that work as short clips. Use your own key from the " +
+      "provider, or a model running on this computer."),
+    row("Provider", preset), row("Address", base), row("Model", model), row("API key", key),
+    el("p", {className: "hint"}, "The key is kept in llm.json in the clip-watcher folder and is never shown on this page again. With a provider on the " +
+      "internet, the words of each video go to that provider to pick moments. With Ollama or llama.cpp nothing leaves this computer. " +
+      "Model names change over time: type the one your provider lists."),
+    el("div", {className: "row"}, test, save, forget), note));
+  dialog.showModal();
+  preset.focus();
+}
+
+function momentRow(r, p, m) {
+  const job = p.making[m.id];
+  const play = el("button", {}, "Play"), edit = el("button", {}, "Edit"), drop = el("button", {}, "Delete");
+  const make = el("button", {className: "go"}, job && job.state === "done" ? "Make again" : "Make clip");
+  make.disabled = Boolean(job && job.state === "making");
+  play.onclick = () => { openPod(r); r.video.currentTime = m.start; r.video.play().catch(() => {}); };
+  edit.onclick = () => {
+    r.editing = m.id;
+    r.start.value = m.start; r.end.value = m.end; r.title.value = m.title || "";
+    r.save.textContent = "Save changes";
+    r.start.focus();
+  };
+  drop.onclick = () => act("/api/podcast/moment", {id: p.id, action: "delete", moment: m.id});
+  make.onclick = () => act("/api/podcast/clip", {id: p.id, moment: m.id});
+  const status = !job ? "" : job.state === "making" ? "Making the clip" : job.state === "done" ? "Made: it is in Clips to review" : "Failed: " + job.error;
+  const by = m.by === "ai" ? "model" : m.by === "loud" ? "loud spot" : "you";
+  return el("div", {className: "moment"},
+    el("div", {}, el("div", {className: "when"}, `${mmss(m.start)} to ${mmss(m.end)}`), el("div", {className: "by"}, `${by}, ${Math.round(m.end - m.start)} s`)),
+    el("div", {}, el("div", {className: "name"}, m.title || "No title"), el("div", {className: "sub"}, m.why || ""),
+      status ? el("div", {className: "state" + (job.state === "failed" ? " bad" : "")}, status) : ""),
+    el("div", {className: "acts"}, play, edit, drop, make));
+}
+function openPod(r) {
+  r.inside.hidden = false;
+  r.toggle.textContent = "Hide";
+  if (!r.video) {
+    r.video = el("video", {controls: true, preload: "metadata", src: `/api/podcast/video?id=${r.data.id}&t=${token}`});
+    r.player.prepend(r.video);
+  }
+}
+function addPod(p) {
+  const r = {data: p, sig: "", editing: null, video: null};
+  r.name = el("div", {className: "name"});
+  r.sub = el("div", {className: "sub"});
+  r.state = el("div", {className: "state", role: "status"});
+  r.toggle = el("button", {}, "Moments");
+  r.again = el("button", {title: "Find the moments again; moments you added by hand are replaced"}, "Find again");
+  r.remove = el("button", {}, "Remove");
+  r.list = el("div");
+  const num = (id, label) => {
+    const input = el("input", {type: "text", id, inputMode: "decimal", autocomplete: "off"});
+    return [input, el("div", {}, el("label", {htmlFor: id}, label), input)];
+  };
+  const [start, startBox] = num(`start-${p.id}`, "Start, seconds"), [end, endBox] = num(`end-${p.id}`, "End, seconds");
+  r.start = start;
+  r.end = end;
+  r.title = el("input", {type: "text", id: `title-${p.id}`, autocomplete: "off", maxLength: 100});
+  const here = () => el("button", {type: "button"}, "From player");
+  const fromStart = here(), fromEnd = here();
+  const clock = () => (Math.round(r.video.currentTime * 10) / 10);
+  fromStart.onclick = () => { if (r.video) r.start.value = clock(); };
+  fromEnd.onclick = () => { if (r.video) r.end.value = clock(); };
+  r.save = el("button", {className: "go"}, "Add moment");
+  const clear = el("button", {type: "button"}, "Clear");
+  const reset = () => { r.editing = null; r.start.value = r.end.value = r.title.value = ""; r.save.textContent = "Add moment"; };
+  clear.onclick = reset;
+  r.save.onclick = async () => {
+    const ok = await act("/api/podcast/moment", {id: p.id, action: "save", moment: r.editing, start: Number(r.start.value), end: Number(r.end.value),
+                                                title: r.title.value});
+    if (ok) reset();
+  };
+  r.player = el("div", {className: "player"}, el("p", {className: "hint"},
+    "Play the video, then press From player at the start and at the end of the part you want. A clip lasts 8 to 90 seconds."));
+  r.inside = el("div", {className: "inside", hidden: true}, r.player,
+    el("div", {}, r.list, el("div", {className: "mark"}, startBox, el("div", {className: "pair"}, fromStart), endBox, el("div", {className: "pair"}, fromEnd),
+      el("div", {className: "wide"}, el("label", {htmlFor: r.title.id}, "Title"), r.title), r.save, clear)));
+  r.toggle.onclick = () => { if (r.inside.hidden) openPod(r); else { r.inside.hidden = true; r.toggle.textContent = "Moments"; if (r.video) r.video.pause(); } };
+  r.again.onclick = () => act("/api/podcast/again", {id: p.id});
+  r.remove.onclick = () => confirm(`Remove ${r.data.name}? Its downloaded video is deleted. Clips already made stay.`) && act("/api/podcast/remove", {id: p.id});
+  r.root = el("div", {className: "pod"},
+    el("div", {className: "top"}, el("div", {}, r.name, r.sub), r.state, el("div", {className: "acts"}, r.toggle, r.again, r.remove)), r.inside);
+  $("pods").append(r.root);
+  pods.set(p.id, r);
+  return r;
+}
+function paintPod(r, p) {
+  r.data = p;
+  const working = p.state === "working", making = Object.values(p.making).some(j => j.state === "making");
+  r.name.textContent = p.name;
+  r.sub.textContent = (p.title || p.url || p.file) + (p.duration ? ` (${mmss(p.duration)})` : "");
+  r.state.textContent = working ? p.note : p.state === "failed" ? "Failed: " + p.note
+    : `${p.moments.length} ${p.moments.length === 1 ? "moment" : "moments"}` + (p.note ? ". " + p.note : "");
+  r.state.className = "state" + (p.state === "failed" || (p.state === "ready" && p.note) ? " bad" : "");
+  r.toggle.disabled = p.state !== "ready";
+  r.again.disabled = working || making;
+  r.remove.disabled = working || making;
+  const sig = JSON.stringify([p.moments, p.making]);
+  if (sig !== r.sig) {
+    r.sig = sig;
+    r.list.replaceChildren(...(p.moments.length ? p.moments.map(m => momentRow(r, p, m))
+      : [el("p", {className: "hint"}, "No moments found. Mark one by hand below.")]));
+  }
+}
+function paintPods(list) {
+  const seen = new Set(list.map(p => p.id));
+  for (const [id, r] of pods) if (!seen.has(id)) { r.root.remove(); pods.delete(id); }
+  for (const p of list) paintPod(pods.get(p.id) || addPod(p), p);
+  $("pods-empty").hidden = list.length > 0;
+}
+$("podform").onsubmit = async event => {
+  event.preventDefault();
+  const source = $("pod-source").value.trim();
+  if (!source) { $("notice").textContent = "Enter a video link or the path of a video file first"; $("pod-source").focus(); return; }
+  if (await act("/api/podcast/add", {source, name: $("pod-name").value, profile: $("pod-channel").value, cam: $("pod-cam").value})) {
+    $("pod-source").value = $("pod-name").value = "";
+  }
+};
+$("llm-open").onclick = openLlm;
+
 // ---- the cam editor: where the streamer's cam is, and the clip's shape, for one stream ----
 
 let shaper = null;
 const SHAPES = ["9:16", "4:5", "3:4", "1:1", "16:9", "21:9"];
 const HEIGHTS = [0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.5];
 const MODES = [["", "Follow the settings"], ["top", "Cam above the game"], ["bottom", "Cam below the game"],
-               ["over", "Cam over the game"], ["off", "No cam"]];
+               ["over", "Cam over the game"], ["off", "No cam"], ["fit", "Whole picture over a blur"]];
 const CORNERS = [["tl", "Top left"], ["tr", "Top right"], ["bl", "Bottom left"], ["br", "Bottom right"]];
 const clamp = (v, low, high) => Math.min(Math.max(v, low), high);
 const option = ([value, text]) => el("option", {value}, text);
@@ -1156,6 +1395,7 @@ function render() {
                       `width ${Math.round(b.w * 100)}%, height ${Math.round(b.h * 100)}%`);
   }
   shaper.boxes.cam.classList.toggle("off", !(p.stacked || p.over));
+  shaper.boxes.game.hidden = p.cam === "fit";
   shaper.boxes.game.classList.toggle("auto", !shaper.game);
   shaper.lastRatio = p.ratio;
   draw();
@@ -1171,6 +1411,8 @@ function fit() {
     : p.over
     ? "Drag the Cam box over the streamer's cam, any shape. It is shown small in the corner you pick, over the game, " +
       "and the game fills the whole clip. Drag the Game box to the part of the game to show."
+    : p.cam === "fit"
+    ? "The whole picture is shown, over a blurred copy of itself that fills the clip. The boxes are not used."
     : "No cam panel: the clip is one picture, cut from the Game box." +
       (ed.shape.value === "free" ? " Resize the box any way: the clip takes its shape." : "");
   if (ed.game) set("game", ed.game.x, ed.game.y, ed.game.w, ed.game.h); else render();
@@ -1201,6 +1443,14 @@ function draw() {
     ctx.fillRect(x, y, w, h);
   };
   ctx.clearRect(0, 0, W, H);
+  if (p.cam === "fit" && ready) {
+    const iw = img.naturalWidth, ih = img.naturalHeight, cover = Math.max(W / iw, H / ih), inside = Math.min(W / iw, H / ih);
+    ctx.filter = "blur(6px)";
+    ctx.drawImage(img, (W - iw * cover) / 2, (H - ih * cover) / 2, iw * cover, ih * cover);
+    ctx.filter = "none";
+    ctx.drawImage(img, (W - iw * inside) / 2, (H - ih * inside) / 2, iw * inside, ih * inside);
+    return;
+  }
   if (!p.stacked) {
     paint(holding(game, p.ratio, p), 0, 0, W, H, "#888");
     if (p.over) {
@@ -1274,7 +1524,9 @@ function addRow(stream) {
     channel: el("select", {className: "chan", ariaLabel: "Channel for " + stream.channel,
                            title: "The channel this stream's clips are made for; it applies from the next start"}),
     shape: el("button", {title: "Set where the streamer's cam is and the shape of this stream's clips"}, "Cam & shape"),
+    clipNow: el("button", {title: "Make a clip of the last seconds now, without waiting for a chat spike"}, "Clip now"),
   };
+  r.clipNow.onclick = () => act("/api/clip-now", {id: stream.id});
   // a stream that is already stopping can be told to quit at once. That is the only request that drops clips,
   // so it is asked first; the question also catches the second click of a double-click on Stop
   r.toggle.onclick = () => !r.running ? act("/api/start", {id: stream.id, args: args()})
@@ -1288,7 +1540,7 @@ function addRow(stream) {
     r.chart,
     el("div", {className: "tune"}, min.node, factor.node),
     r.made,
-    el("div", {className: "acts"}, r.shape, r.toggle, r.remove));
+    el("div", {className: "acts"}, r.clipNow, r.shape, r.toggle, r.remove));
   r.shape.onclick = () => openShaper(stream.id);
   $("streams").append(r.root);
   rows.set(stream.id, r);
@@ -1342,6 +1594,7 @@ function paint(r, s) {
   r.toggle.className = s.running && !s.stopping ? "halt" : s.running ? "" : "go";
   r.toggle.title = s.stopping ? "Quit this stream at once and drop the clips it is still finishing" : "";
   r.remove.disabled = s.running;
+  r.clipNow.disabled = !video;
   r.data = s;
   if (!r.channel.options.length || r.channel.value !== s.profile && document.activeElement !== r.channel) fillChannel(r);
   r.shape.textContent = LOOK_KEYS.some(key => s[key]) ? "Cam & shape *" : "Cam & shape";
@@ -1358,6 +1611,7 @@ function show(state) {
   const seen = new Set(state.streams.map(s => s.id));
   for (const [id, r] of rows) if (!seen.has(id)) { if (shaper && shaper.id === id) closeShaper(); r.root.remove(); rows.delete(id); }
   for (const s of state.streams) paint(rows.get(s.id) || addRow(s), s);
+  paintPods(state.podcasts || []);
   $("empty").hidden = state.streams.length > 0;
   const running = state.streams.filter(s => s.running), recording = running.filter(s => s.stats && s.stats.video);
   $("lamp").className = "lamp" + (recording.length ? " on" : running.length ? " armed" : "");
@@ -1532,6 +1786,7 @@ if (location.protocol === "file:") {
     loadCategories();
     loadClips();
     loadChannels();
+    loadLlm();
     setInterval(loadClips, 15000);
   }).catch(error => offline("This page lost its connection", error.message));
 }

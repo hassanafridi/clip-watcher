@@ -18,6 +18,7 @@ from urllib.parse import parse_qs
 
 import brand
 import live
+import podcast
 import upload
 import watcher
 
@@ -26,6 +27,7 @@ PAGE = HERE / "gui.html"
 SAVED = HERE / "streams.json"
 CLIPS = HERE / "clips"  # where watcher.py saves clips; clips.json there remembers what was reviewed
 CLIP_NAME = re.compile(r"[A-Za-z0-9_-]{1,80}\.mp4")
+POD_ID = re.compile(r"[a-z0-9-]{1,48}")
 
 
 def read_profile(pid):
@@ -264,18 +266,56 @@ def shape_values(look):
         out["size"] = None if size is None else watcher.cam_size(str(float(size)))
     except (argparse.ArgumentTypeError, ValueError):
         raise ValueError("look") from None
-    for key, allowed in (("mode", ("top", "bottom", "off", "over")), ("corner", ("tl", "tr", "bl", "br"))):
+    for key, allowed in (("mode", ("top", "bottom", "off", "over", "faces", "fit")), ("corner", ("tl", "tr", "bl", "br"))):
         if look.get(key) not in (None, *allowed):
             raise ValueError(key)
         out[key] = look.get(key)
     return out
 
 
+def clip_sidecar(name):
+    """What a clip's layout file says, or {}."""
+    path = clip_path(name)
+    try:
+        data = json.loads(path.with_suffix(".json").read_text(encoding="utf-8")) if path else {}
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def clip_source(name):
-    """The channel a clip came from, and its stream link, read from the clip's file name."""
+    """The channel a clip came from, and its link: from the clip's file name, or for a clip cut out of a podcast, from its
+    layout file, which holds the podcast's name and address."""
+    side = clip_sidecar(name)
+    if side.get("name") and side.get("source"):
+        return str(side["name"]), str(side["source"])
     m = re.match(r"(.+?)(-kick)?_\d{8}_\d{6}\.mp4$", name)
     channel = m[1] if m else name.rsplit(".", 1)[0]
     return channel, f"{'kick.com' if m and m[2] else 'twitch.tv'}/{channel}"
+
+
+class Pod:
+    """One podcast video on the board: where it came from, the moments found in it, and the clips being made from it."""
+
+    def __init__(self, pid, folder, meta):
+        self.id, self.folder = pid, folder
+        self.name, self.url, self.file = str(meta.get("name") or pid), str(meta.get("url") or ""), str(meta.get("file") or "")
+        self.profile, self.cam = str(meta.get("profile") or ""), str(meta.get("cam") or "faces")
+        self.title, self.duration = str(meta.get("title") or ""), float(meta.get("duration") or 0)
+        self.state, self.note = str(meta.get("state") or "failed"), str(meta.get("note") or "")
+        self.moments, self.making = [], {}  # making: moment id -> {"state": "making" / "done" / "failed", ...}
+
+    def media(self):
+        return Path(self.file) if self.file else self.folder / "source.mp4"
+
+    def meta(self):
+        return {"name": self.name, "url": self.url, "file": self.file, "profile": self.profile, "cam": self.cam,
+                "title": self.title, "duration": self.duration, "state": self.state, "note": self.note}
+
+    def public(self):
+        return {"id": self.id, "name": self.name, "url": self.url, "file": self.file, "profile": self.profile, "cam": self.cam,
+                "title": self.title, "duration": self.duration, "state": self.state, "note": self.note,
+                "moments": self.moments, "making": self.making}
 
 
 class Stream:
@@ -316,6 +356,8 @@ class Board:
         self.streams, self.shared, self.lines, self.first = {}, [], [], 0
         self.topped = {}  # site -> (when asked, its most watched categories)
         self.signing, self.sign_problems = set(), {}  # channels with a Google sign-in open, and why one failed
+        self.pods = {}  # podcast videos, by id
+        self.load_pods()
         try:
             self.reviewed = json.loads((CLIPS / "clips.json").read_text(encoding="utf-8"))
             assert isinstance(self.reviewed, dict)
@@ -624,7 +666,7 @@ class Board:
             out.append({"name": clip.name, "channel": channel, "source": source, "made": int(clip.stat().st_mtime),
                         "parts": layout_of, "thumb": clip.with_suffix(".jpg").is_file(),
                         "tags": upload.hashtags(self.setting("--hashtags", upload.HASHTAGS, profile), source,
-                                                (layout_of or {}).get("game", "")),
+                                                (layout_of or {}).get("game", ""), channel if (layout_of or {}).get("name") else None),
                         "profile": profile, "privacy": self.setting("--privacy", "private", profile),
                         "mb": round(clip.stat().st_size / 1e6, 1), "title": title, "description": description,
                         **reviewed.get(clip.name, {"state": "uploaded" if clip.parent.name == "uploaded" else "waiting"})})
@@ -664,8 +706,10 @@ class Board:
                 picture = clip.with_suffix(".jpg")
                 if not picture.is_file():  # a clip made before default thumbnails still goes out with one
                     self.first_thumbnail(name)
-                video = upload.publish(clip, clip_source(name)[1], privacy, title.translate(literal),
+                named, link = clip_source(name)
+                video = upload.publish(clip, link, privacy, title.translate(literal),
                                        description.translate(literal), say=said.append,
+                                       channel=named if clip_sidecar(name).get("name") else None,
                                        tags=str(tags if tags is not None else self.setting("--hashtags", upload.HASHTAGS, profile)),
                                        thumbnail=picture if picture.is_file() else None, profile=profile)
                 result = {"state": "uploaded", "privacy": privacy, "id": video,
@@ -912,6 +956,177 @@ class Board:
             stream.profile = pid
             self.save()
 
+    def load_pods(self):
+        for folder in sorted(podcast.FOLDER.glob("*")) if podcast.FOLDER.is_dir() else []:
+            try:
+                pod = Pod(folder.name, folder, json.loads((folder / "meta.json").read_text(encoding="utf-8")))
+                pod.moments = json.loads((folder / "moments.json").read_text(encoding="utf-8")) if (folder / "moments.json").is_file() else []
+            except (OSError, ValueError, AttributeError, TypeError):
+                continue
+            if pod.state == "working":
+                pod.state, pod.note = "failed", "The board was closed before this finished. Try again."
+            self.pods[pod.id] = pod
+
+    def pod_save(self, pod):
+        """Keep a podcast's facts and moments in its folder. Called with the lock held."""
+        for name, data in (("meta.json", pod.meta()), ("moments.json", pod.moments)):
+            fresh = pod.folder / (name + ".tmp")
+            fresh.write_text(json.dumps(data), encoding="utf-8")
+            os.replace(fresh, pod.folder / name)
+
+    def add_pod(self, source, name, profile, cam):
+        """Put a video on the board: a link yt-dlp can fetch, or a video file on this computer."""
+        source, name, profile = str(source or "").strip().strip('"'), str(name or "").strip()[:60], str(profile or "")
+        if cam not in ("faces", "fit", "top", "bottom", "off", "over"):
+            return "Pick how the clips are laid out", None
+        if profile and not read_profile(profile):
+            return "That channel is not there any more", None
+        link = re.fullmatch(r"https?://\S+", source) is not None
+        if not link and not Path(source).is_file():
+            return "Enter a video link, or the path of a video file on this computer", None
+        if not name:
+            name = Path(source).stem if not link else re.sub(r"^https?://(www\.)?", "", source).split("/")[0].split(".")[0]
+        pid = f"{re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')[:30] or 'podcast'}-{secrets.token_hex(3)}"
+        folder = podcast.FOLDER / pid
+        with self.lock:
+            if len(self.pods) >= 30:
+                return "The board holds 30 podcasts at most; remove one first", None
+            folder.mkdir(parents=True)
+            pod = Pod(pid, folder, {"name": name, "url": source if link else "", "file": "" if link else str(Path(source).resolve()),
+                                    "profile": profile, "cam": cam, "state": "working", "note": "Starting"})
+            self.pods[pid] = pod
+            self.pod_save(pod)
+        threading.Thread(target=self.pod_work, args=(pod,), daemon=True).start()
+        return None, pid
+
+    def pod_work(self, pod):
+        """Fetch the video if needed, read or listen to what is said, and find the moments."""
+        def say(text):
+            with self.lock:
+                pod.note = text
+
+        try:
+            podcast.tool("ffmpeg")
+            if not pod.file and not pod.media().is_file():
+                info = podcast.fetch(pod.url, pod.folder, say)
+                with self.lock:
+                    pod.title = str(info.get("title") or "")[:200]
+            duration = podcast.length_of(pod.media())
+            with self.lock:
+                pod.duration = duration
+            moments, problem = podcast.find_moments(pod.folder, pod.media(), duration, podcast.load_llm(),
+                                                    self.setting("--model", "base"), self.setting("--language", "") or None, say)
+            with self.lock:
+                pod.moments, pod.state, pod.note, pod.making = moments, "ready", problem, {}
+        except (podcast.Problem, OSError, subprocess.SubprocessError, ValueError) as e:
+            with self.lock:
+                pod.state, pod.note = "failed", str(e)[:300]
+        with self.lock:
+            self.pod_save(pod)
+            self.say(f"[podcast] {pod.name}: " + ("ready, " + str(len(pod.moments)) + " moments" if pod.state == "ready" else "failed, " + pod.note))
+
+    def pod_again(self, pid):
+        """Find the moments again (after a model was set up, or a failure); what was edited by hand is replaced."""
+        with self.lock:
+            pod = self.pods.get(pid)
+            if not pod:
+                return "That podcast is not on the board"
+            if pod.state == "working" or any(j.get("state") == "making" for j in pod.making.values()):
+                return "Wait until it has finished what it is doing"
+            pod.state, pod.note = "working", "Starting"
+            self.pod_save(pod)
+        threading.Thread(target=self.pod_work, args=(pod,), daemon=True).start()
+
+    def pod_remove(self, pid):
+        with self.lock:
+            pod = self.pods.get(pid)
+            if not pod:
+                return "That podcast is not on the board"
+            if pod.state == "working" or any(j.get("state") == "making" for j in pod.making.values()):
+                return "Wait until it has finished what it is doing"
+            del self.pods[pid]
+        shutil.rmtree(pod.folder, ignore_errors=True)
+
+    def pod_moment(self, pid, body):
+        """Add or change a moment by hand (action save), or drop one (action delete)."""
+        with self.lock:
+            pod = self.pods.get(pid)
+            if not pod or pod.state != "ready":
+                return "That podcast is not ready"
+            mid = body.get("moment")
+            if body.get("action") == "delete":
+                pod.moments = [m for m in pod.moments if m["id"] != mid]
+                return self.pod_save(pod)
+            start, end = number(body.get("start"), 0, 1e6), number(body.get("end"), 0, 1e6)
+            if start is None or end is None or end <= start:
+                return "Give a start and an end in seconds, the end after the start"
+            if not podcast.SHORTEST <= end - start <= podcast.LONGEST:
+                return f"A clip lasts {podcast.SHORTEST} to {podcast.LONGEST} seconds"
+            if pod.duration and end > pod.duration + 1:
+                return f"The video is only {pod.duration:.0f} seconds long"
+            peak = number(body.get("peak"), start, end)
+            title = str(body.get("title") or "").strip()[:100]
+            have = next((m for m in pod.moments if m["id"] == mid), None)
+            if have is None:
+                if len(pod.moments) >= 200:
+                    return "A podcast holds 200 moments at most"
+                have = {"id": max((m["id"] for m in pod.moments), default=0) + 1, "by": "you", "score": 10, "why": ""}
+                pod.moments.append(have)
+            have.update(start=round(start, 1), end=round(end, 1), peak=round(start + (end - start) / 2 if peak is None else peak, 1),
+                        title=title)
+            pod.moments.sort(key=lambda m: m["start"])
+            self.pod_save(pod)
+
+    def pod_clip(self, pid, mid):
+        """Cut one moment into a finished clip, in the background: it lands in the review list like any other."""
+        with self.lock:
+            pod = self.pods.get(pid)
+            moment = next((m for m in pod.moments if m["id"] == mid), None) if pod else None
+            if not pod or not moment or pod.state != "ready":
+                return "That moment is not there any more"
+            if pod.making.get(mid, {}).get("state") == "making":
+                return "That clip is already being made"
+            if pod.profile and not read_profile(pod.profile):
+                return f"The channel '{pod.profile}' is gone; pick another one for this podcast"
+            own = [f"--from-file={pod.media()}", f"--start={moment['start']}", f"--end={moment['end']}", f"--peak={moment['peak']}",
+                   f"--name={pod.name}", f"--source={pod.url}", f"--cam={pod.cam}"]
+            own += [f"--profile={pod.profile}"] if pod.profile else []
+            mine = {a.partition("=")[0] for a in own} | set(profile_settings(pod.profile))
+            proc = subprocess.Popen(
+                [sys.executable, "-u", str(HERE / "watcher.py"), *own,
+                 *(a for a in self.shared if a.partition("=")[0] not in {*PER_STREAM, *mine} and a != "--upload")],
+                cwd=HERE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", **watcher.APART)
+            pod.making[mid] = {"state": "making"}
+        threading.Thread(target=self.pod_pump, args=(pod, mid, proc), daemon=True).start()
+
+    def pod_pump(self, pod, mid, proc):
+        clip, last = "", ""
+        for line in proc.stdout:
+            line = line.rstrip()
+            found = CLIP.search(line)
+            if found:
+                clip = Path(found[1].replace("\\", "/")).name
+                threading.Thread(target=self.first_thumbnail, args=(clip,), daemon=True).start()
+            if line and not line.startswith("RESULT "):
+                last = line
+                with self.lock:
+                    self.say(line)
+        code = proc.wait()
+        with self.lock:
+            pod.making[mid] = {"state": "done", "clip": clip} if code == 0 and clip else {
+                "state": "failed", "error": (last.partition("] ")[2] or last or f"exit code {code}")[:240]}
+
+    def clip_now(self, stream_id):
+        """Make a clip of the last seconds of a running stream, without waiting for a chat spike."""
+        with self.lock:
+            stream = self.streams.get(stream_id)
+            if not stream or not stream.proc:
+                return "Start that stream first"
+            if not (stream.stats or {}).get("video"):
+                return "No video is being recorded yet"
+            if not stream.tell("clip"):
+                return "That stream is not listening any more"
+
     def clear(self):
         """Delete every clip still waiting for review; uploaded ones in clips/uploaded/ stay."""
         gone = 0
@@ -1037,6 +1252,7 @@ class Board:
         with self.lock:
             return {
                 "streams": [s.public() for s in self.streams.values()],
+                "podcasts": [pod.public() for pod in self.pods.values()],
                 "lines": self.lines[max(since - self.first, 0):],
                 "next": self.first + len(self.lines),
             }
@@ -1136,6 +1352,8 @@ def make_server(port=0, lan_key=None):
                     return self.reply(403, {"error": "Not found."})
                 page = PAGE.read_text(encoding="utf-8").replace("__TOKEN__", token)
                 self.reply(200, page.encode(), "text/html; charset=utf-8")
+            elif path == "/api/podcast/video":
+                self.video(parse_qs(query))
             elif not self.allowed():
                 return
             elif path == "/api/options":
@@ -1145,6 +1363,8 @@ def make_server(port=0, lan_key=None):
                 self.reply(200, board.state(int(since) if since.isdigit() else 0))
             elif path == "/api/channels":
                 self.reply(200, board.channels())
+            elif path == "/api/llm":
+                self.reply(200, {"llm": podcast.public_llm(), "presets": podcast.PRESETS})
             elif path == "/api/channel-file":
                 query = parse_qs(query)
                 name, pid = query.get("name", [""])[0], query.get("id", [""])[0]
@@ -1171,6 +1391,52 @@ def make_server(port=0, lan_key=None):
                     self.reply(400, {"error": str(e)})
             else:
                 self.reply(404, {"error": "Not found."})
+
+        def video(self, query):
+            """A podcast's video for the page's player, in parts as the player asks for them. A player cannot send our
+            token header, so this one route takes it in the link."""
+            given = query.get("t", [""])[0]
+            pod = board.pods.get(query.get("id", [""])[0])
+            if not self.local() or not secrets.compare_digest(given.encode(), token.encode()):
+                return self.reply(403, {"error": "clip-watcher was restarted. Reload this page"})
+            if not pod or not pod.media().is_file():
+                return self.reply(404, {"error": "That video is not there"})
+            size = pod.media().stat().st_size
+            wanted = re.fullmatch(r"bytes=(\d*)-(\d*)", self.headers.get("Range", ""))
+            first, last = 0, size - 1
+            if wanted and (wanted[1] or wanted[2]):
+                if wanted[1]:
+                    first = int(wanted[1])
+                    last = min(int(wanted[2]), size - 1) if wanted[2] else size - 1
+                else:
+                    first = max(0, size - int(wanted[2]))
+                if first >= size or first > last:
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{size}")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+            self.send_response(206 if wanted else 200)
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(last - first + 1))
+            if wanted:
+                self.send_header("Content-Range", f"bytes {first}-{last}/{size}")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Frame-Options", "DENY")
+            self.end_headers()
+            try:
+                with pod.media().open("rb") as f:
+                    f.seek(first)
+                    left = last - first + 1
+                    while left > 0:
+                        chunk = f.read(min(262144, left))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        left -= len(chunk)
+            except OSError:  # the player moved on: a seek, or the page closed
+                pass
 
         def do_POST(self):
             if not self.allowed():
@@ -1239,6 +1505,39 @@ def make_server(port=0, lan_key=None):
                 error = board.draw_brand(str(body.get("id") or ""), body.get("tagline"))
             elif self.path == "/api/channel/signin":
                 error = board.sign_in(str(body.get("id") or ""))
+            elif self.path == "/api/clip-now":
+                error = board.clip_now(stream_id)
+            elif self.path == "/api/podcast/add":
+                error, pid = board.add_pod(body.get("source"), body.get("name"), body.get("profile"), body.get("cam"))
+                if not error:
+                    return self.reply(200, {"id": pid})
+            elif self.path == "/api/podcast/again":
+                error = board.pod_again(str(body.get("id") or ""))
+            elif self.path == "/api/podcast/remove":
+                error = board.pod_remove(str(body.get("id") or ""))
+            elif self.path == "/api/podcast/moment":
+                error = board.pod_moment(str(body.get("id") or ""), body)
+            elif self.path == "/api/podcast/clip":
+                error = board.pod_clip(str(body.get("id") or ""), body.get("moment"))
+            elif self.path == "/api/llm/save":
+                try:
+                    podcast.save_llm(body.get("preset"), body.get("base"), body.get("model"), body.get("key"))
+                except podcast.Problem as e:
+                    error = str(e)
+            elif self.path == "/api/llm/forget":
+                podcast.forget_llm()
+            elif self.path == "/api/llm/test":
+                cfg = {"preset": body.get("preset"), "base": str(body.get("base") or "").strip().rstrip("/"),
+                       "model": str(body.get("model") or "").strip(), "key": str(body.get("key") or "").strip()}
+                saved = podcast.load_llm()
+                if not cfg["key"] and saved and saved["preset"] == cfg["preset"]:
+                    cfg["key"] = saved["key"]  # the key was kept earlier; the page never has it
+                try:
+                    if cfg["preset"] not in podcast.PRESETS or not re.fullmatch(r"https?://\S+", cfg["base"]) or not cfg["model"]:
+                        raise podcast.Problem("Fill in the provider, the address and the model first")
+                    return self.reply(200, {"reply": podcast.check_llm(cfg)})
+                except podcast.Problem as e:
+                    error = str(e)
             elif self.path == "/api/stream-channel":
                 error = board.set_channel(stream_id, body.get("profile"))
             elif self.path == "/api/review/upload":
@@ -1268,6 +1567,7 @@ def make_server(port=0, lan_key=None):
     class Server(ThreadingHTTPServer):
         # on Windows address reuse would let a second clip-watcher bind the same port and steal requests
         allow_reuse_address = sys.platform != "win32"
+        request_queue_size = 128  # the default of 5 drops connections when a phone and a laptop poll at once
 
     httpd = Server(("0.0.0.0" if lan_key else "127.0.0.1", port), Handler)
     httpd.board = board

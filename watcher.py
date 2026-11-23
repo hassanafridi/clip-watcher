@@ -46,7 +46,7 @@ FACE_SCORE = 0.8
 FACE_MODEL = HERE / "face_detection_yunet_2023mar.onnx"
 FACE_MODEL_URL = "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/" + FACE_MODEL.name
 FACE_CODE = (f"import json, sys; sys.path.insert(0, {str(HERE)!r}); import watcher; "
-             "print(json.dumps(watcher.find_face(sys.argv[1])))")
+             "print(json.dumps(watcher.find_faces(sys.argv[1], 3) if sys.argv[2:] else watcher.find_face(sys.argv[1])))")
 
 # helper programs run out of reach of the terminal's Ctrl+C: stopping is done in order, recorders last,
 # and clips being finished are not cut down with the rest
@@ -58,6 +58,7 @@ PDEATH = ("import ctypes, os, signal, sys\n"
           "os.execvp(sys.argv[1], sys.argv[1:])")
 
 STOP = threading.Event()  # set once to wind every channel down
+MANUAL = threading.Event()  # set by the board's "clip now": the next pass of the watch loop cuts a clip
 TUNE = {}  # "min", "factor", "ratio" and "cam_box" changed while running (--stdin-control); they override the command line
 RECORDERS = {}  # channel tag -> its Recorder, for the board's still pictures
 CHAT_LOG = {}  # "twitch.tv/name" or "kick.com/name" -> recent chat lines as (wall-clock time, user, text)
@@ -606,16 +607,26 @@ class Recorder:
             self._sweep(time.time(), final=True)  # a second pass for programs the first one had to end
 
 
+def steady_faces(boxes, frames, limit=1):
+    """Median boxes of the biggest groups of overlapping detections, most seen first; a group counts only when it
+    shows in a third of the frames."""
+    found, left = [], list(boxes)
+    while left and len(found) < limit:
+        best = []
+        for x, y, w, h in left:
+            group = [b for b in left if abs(b[0] + b[2] / 2 - x - w / 2) < w and abs(b[1] + b[3] / 2 - y - h / 2) < h]
+            if len(group) > len(best):
+                best = group
+        if len(best) * 3 < frames:
+            break
+        found.append(tuple(int(statistics.median(v)) for v in zip(*best)))
+        left = [b for b in left if b not in best]
+    return found
+
+
 def steady_face(boxes, frames):
-    """Median box of the biggest group of overlapping detections; None unless it shows in a third of the frames."""
-    best = []
-    for x, y, w, h in boxes:
-        group = [b for b in boxes if abs(b[0] + b[2] / 2 - x - w / 2) < w and abs(b[1] + b[3] / 2 - y - h / 2) < h]
-        if len(group) > len(best):
-            best = group
-    if not best or len(best) * 3 < frames:
-        return None
-    return tuple(int(statistics.median(v)) for v in zip(*best))
+    """The streamer's face: the biggest steady group of detections; None unless it shows in a third of the frames."""
+    return next(iter(steady_faces(boxes, frames)), None)
 
 
 def face_model():
@@ -629,6 +640,12 @@ def face_model():
 
 def find_face(path):
     """Frame width, frame height and the streamer's face box (or None), sampling one frame per second."""
+    w, h, faces = find_faces(path, 1)
+    return w, h, faces[0] if faces else None
+
+
+def find_faces(path, limit):
+    """Frame width, frame height and up to `limit` steady face boxes, left to right, sampling one frame per second."""
     import cv2
 
     video = cv2.VideoCapture(str(path))
@@ -638,7 +655,7 @@ def find_face(path):
     try:
         detector = cv2.FaceDetectorYN.create(face_model(), "", (w, h), FACE_SCORE)
     except Exception:  # no detector (the model could not be fetched): the clip gets the plain centre crop
-        return w, h, None
+        return w, h, []
     boxes, frames, n = [], 0, 0
     while video.grab():
         if n % step == 0:
@@ -646,7 +663,7 @@ def find_face(path):
             boxes += [] if faces is None else [tuple(int(v) for v in face[:4]) for face in faces]
             frames += 1
         n += 1
-    return w, h, steady_face(boxes, frames)
+    return w, h, sorted(steady_faces(boxes, frames, limit))
 
 
 def even(v):
@@ -729,6 +746,24 @@ def layout(w, h, face, o, src="[0:v]", motion=lambda width, height: "", box=None
             f"{src}split[a][b];[b]crop={cw}:{ch}:{gx}:{gy},scale={out_w}:{out_h}{motion(out_w, out_h)}[game];"
             f"[a]crop={kw}:{kh}:{kx}:{ky},scale={ow}:{oh}[cam];[game][cam]overlay={x}:{y},setsar=1[v]"
         )
+    if o.cam in ("faces", "fit"):
+        faces = list(getattr(o, "faces", None) or [])[:3] if o.cam == "faces" else []
+        if len(faces) >= 2:  # one panel per person, left to right from the top
+            n = len(faces)
+            heights = [even(out_h / n)] * (n - 1)
+            heights.append(out_h - sum(heights))
+            parts = []
+            for i, ((fx, fy, fw, fh), ph) in enumerate(zip(faces, heights)):
+                aspect = out_w / ph
+                tw = even(min(w, fw * o.face_zoom, h * aspect))
+                th = even(tw / aspect)
+                tx, ty = clamp(fx + fw / 2 - tw / 2, w - tw), clamp(fy + fh / 2 - th / 2 + th * 0.1, h - th)
+                parts.append(f"[s{i}]crop={tw}:{th}:{tx}:{ty},scale={out_w}:{ph}[p{i}]")
+            return (f"{src}split={n}{''.join(f'[s{i}]' for i in range(n))};{';'.join(parts)};"
+                    f"{''.join(f'[p{i}]' for i in range(n))}vstack=inputs={n},setsar=1[v]")
+        return (f"{src}split[a][b];[a]scale={out_w}:{out_h}:force_original_aspect_ratio=increase,"
+                f"crop={out_w}:{out_h},boxblur=24:3[bg];[b]scale={out_w}:{out_h}:force_original_aspect_ratio=decrease[fg];"
+                f"[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]")
     if not stacked(w, face, o, box):
         if game:
             cw, ch, gx, gy = holding(game, out_w / out_h)
@@ -890,7 +925,7 @@ def shape(o):
         o.width, o.height = size, max(2, even(size / o.ratio))
     else:
         o.height, o.width = size, max(2, even(size * o.ratio))
-    o.face_h = 0 if o.cam in ("off", "over") else even(o.height * o.face_share)
+    o.face_h = 0 if o.cam in ("off", "over", "faces", "fit") else even(o.height * o.face_share)
     return o
 
 
@@ -911,12 +946,98 @@ def opening(text, words=6, chars=40):
     return out if len(out) <= chars else out[:chars].rsplit(" ", 1)[0]
 
 
+def finish_clip(raw, out, source, args, o, tag, keep, start, duration, moment, name=None, offline=False):
+    """Turn a raw cut into the finished clip: face, captions, layout, edits, files, and maybe the upload.
+
+    The cut began at `start` and lasts `duration` seconds; `moment` is when it mattered and `keep` how much
+    of it is wanted (the clip without its lead-in). All three share one clock, whichever it is.
+    offline: the cut is out of a file, not a stream; name is what its clips are credited to.
+    """
+    part = RUN / f"{out.stem}.part.mp4"
+    slot = take_slot(args.jobs)
+    try:
+        w, h, found = json.loads(run(sys.executable, "-c", FACE_CODE, raw, *(["many"] if o.cam == "faces" else [])).strip().splitlines()[-1])
+        face = None
+        if o.cam == "faces":
+            o = copy.copy(o)
+            o.faces = found
+        else:
+            face = found
+        # the copy begins on a keyframe a little before the cut asked for, so its true length says how much
+        # to drop in front; dropping after decoding is exact to the frame, seeking inside the file is not.
+        # A cut from the very start of a recording has sound before its first picture; that goes as well
+        probe = run("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                    "stream=start_time:format=start_time,duration", "-of", "csv=p=0", raw).split()
+        # the last two words: where the picture starts, then where the cut starts and how long it is
+        picture, (began, real) = float(probe[-2]), map(float, probe[-1].split(","))
+        cut = max(0, real - keep, picture - began)
+        length = real - cut
+        spike = min(max(length - (start + duration - moment), 0), length)  # in clip time
+        kinds, rate, _ = streams(raw)
+        channel = name or source.rsplit("/", 1)[-1]
+        srt, said = RUN / f"{out.stem}.srt", ""
+        if o.captions != "off" or "{text}" in o.hook:
+            wav = RUN / f"{out.stem}.wav"
+            try:
+                ffmpeg("-i", raw, "-ss", cut, "-vn", "-ac", "1", "-ar", "16000", wav)
+                run(sys.executable, "-m", "whisper", wav, "--model", o.model, "--output_format", "srt",
+                    "--output_dir", RUN, "--verbose", "False", "--fp16", "False",
+                    *(["--word_timestamps", "True", "--max_words_per_line", "3", "--hallucination_silence_threshold", "2",
+                      "--condition_on_previous_text", "False"] if o.captions == "burn" else []),
+                    *(["--language", o.language] if o.language else []))
+                said = upload.transcript(srt)
+            except RuntimeError as e:
+                log(tag, f"no subtitles for {out.name} ({e})")
+        files = {}
+        for kind, text in (("hook", o.hook.format(text=opening(said), channel=channel).strip()
+                            if said or "{text}" not in o.hook else ""), ("tag", o.tag or ""),
+                           ("credit", (o.credit or "").format(channel=channel, source=name or source).strip())):
+            if text:
+                files[kind] = RUN / f"{out.stem}.{kind}.txt"
+                files[kind].write_text(text, encoding="utf-8")
+        begin = start + duration - length  # wall-clock time of the clip's first frame
+        heard = [line for line in heard_chat(source) if begin - 20 <= line[0] <= begin + length]
+        board = chat_box(heard, begin, length, o, *panels(w, h, face, o)[3:5])
+        if board:
+            files["chat"] = RUN / f"{out.stem}.chat.ass"
+            files["chat"].write_text(board, encoding="utf-8")
+        extras, inputs = [], []
+        for kind in ("logo", "intro", "outro"):
+            path = getattr(o, kind)
+            if path:
+                found, _, seconds = streams(path) if kind != "logo" else (set(), "", 0)
+                extras.append((len(inputs) // 2 + 1, kind, "audio" in found, seconds))  # inputs: -i, file
+                inputs += ["-i", path]
+        graph = edit(w, h, face, o, cut, length, spike, rate, "audio" in kinds,
+                     srt if o.captions == "burn" and said else None,  # ffmpeg refuses an empty .srt
+                     files.get("hook"), files.get("tag"), extras, files.get("chat"), files.get("credit"))
+        ffmpeg("-i", raw, *inputs, "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
+               "-c:v", "libx264", "-crf", o.crf, "-c:a", "aac", part)
+        shutil.move(part, out)
+        # how the clip is put together, so the board can cut a different teaser from it later
+        a, b = teaser_span(o.teaser, spike, length) if o.teaser > 0 else (0.0, 0.0)
+        game = "" if offline else stream_category(source)
+        out.with_suffix(".json").write_text(json.dumps({"game": game, "profile": args.profile or "", **({"source": source, "name": name} if offline else {}),
+            "teaser": round(b - a, 3), "teaser_from": round(a, 3), "spike": round(spike, 3), "main": round(length, 3),
+            "intro": round(next((x[3] for x in extras if x[1] == "intro"), 0.0), 3)}), encoding="utf-8")
+        if o.captions != "off" and said:
+            shutil.move(srt, out.with_suffix(".srt"))
+            log(tag, f"saved {out} and {out.with_suffix('.srt').name}")
+        else:
+            log(tag, f"saved {out}")
+        if args.upload:
+            upload.publish(out, source, args.privacy, args.title, args.description, lambda text: log(tag, text),
+                           args.hashtags, game=game, profile=args.profile or "", channel=name)
+    finally:
+        slot.close()
+
+
 def make_clip(recorder, out, source, args, lag, noticed):
     """Cut, crop, subtitle and maybe upload the clip around a spike noticed at wall-clock time `noticed`."""
     global backlog
     tag, o = recorder.tag, clip_options(args)
     moment = noticed - lag  # when chat really spiked: Kick chat is counted `lag` seconds late
-    raw, part = RUN / f"{out.stem}.cut.ts", RUN / f"{out.stem}.part.mp4"
+    raw = RUN / f"{out.stem}.cut.ts"
     try:
         segment = None
         try:
@@ -939,76 +1060,7 @@ def make_clip(recorder, out, source, args, lag, noticed):
             ffmpeg("-sseof", -offset, "-i", segment.path, "-t", duration, "-c", "copy", raw)
         finally:
             recorder.release(segment)
-        slot = take_slot(args.jobs)
-        try:
-            w, h, face = json.loads(run(sys.executable, "-c", FACE_CODE, raw).strip().splitlines()[-1])
-            # the copy begins on a keyframe a little before the cut asked for, so its true length says how much
-            # to drop in front; dropping after decoding is exact to the frame, seeking inside the file is not.
-            # A cut from the very start of a recording has sound before its first picture; that goes as well
-            probe = run("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-                        "stream=start_time:format=start_time,duration", "-of", "csv=p=0", raw).split()
-            # the last two words: where the picture starts, then where the cut starts and how long it is
-            picture, (began, real) = float(probe[-2]), map(float, probe[-1].split(","))
-            cut = max(0, real - keep, picture - began)
-            length = real - cut
-            spike = min(max(length - (start + duration - moment), 0), length)  # in clip time
-            kinds, rate, _ = streams(raw)
-            channel = source.rsplit("/", 1)[-1]
-            srt, said = RUN / f"{out.stem}.srt", ""
-            if o.captions != "off" or "{text}" in o.hook:
-                wav = RUN / f"{out.stem}.wav"
-                try:
-                    ffmpeg("-i", raw, "-ss", cut, "-vn", "-ac", "1", "-ar", "16000", wav)
-                    run(sys.executable, "-m", "whisper", wav, "--model", o.model, "--output_format", "srt",
-                        "--output_dir", RUN, "--verbose", "False", "--fp16", "False",
-                        *(["--word_timestamps", "True", "--max_words_per_line", "3", "--hallucination_silence_threshold", "2",
-                          "--condition_on_previous_text", "False"] if o.captions == "burn" else []),
-                        *(["--language", o.language] if o.language else []))
-                    said = upload.transcript(srt)
-                except RuntimeError as e:
-                    log(tag, f"no subtitles for {out.name} ({e})")
-            files = {}
-            for kind, text in (("hook", o.hook.format(text=opening(said), channel=channel).strip()
-                                if said or "{text}" not in o.hook else ""), ("tag", o.tag or ""),
-                               ("credit", (o.credit or "").format(channel=channel, source=source).strip())):
-                if text:
-                    files[kind] = RUN / f"{out.stem}.{kind}.txt"
-                    files[kind].write_text(text, encoding="utf-8")
-            begin = start + duration - length  # wall-clock time of the clip's first frame
-            heard = [line for line in heard_chat(source) if begin - 20 <= line[0] <= begin + length]
-            board = chat_box(heard, begin, length, o, *panels(w, h, face, o)[3:5])
-            if board:
-                files["chat"] = RUN / f"{out.stem}.chat.ass"
-                files["chat"].write_text(board, encoding="utf-8")
-            extras, inputs = [], []
-            for kind in ("logo", "intro", "outro"):
-                path = getattr(o, kind)
-                if path:
-                    found, _, seconds = streams(path) if kind != "logo" else (set(), "", 0)
-                    extras.append((len(inputs) // 2 + 1, kind, "audio" in found, seconds))  # inputs: -i, file
-                    inputs += ["-i", path]
-            graph = edit(w, h, face, o, cut, length, spike, rate, "audio" in kinds,
-                         srt if o.captions == "burn" and said else None,  # ffmpeg refuses an empty .srt
-                         files.get("hook"), files.get("tag"), extras, files.get("chat"), files.get("credit"))
-            ffmpeg("-i", raw, *inputs, "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
-                   "-c:v", "libx264", "-crf", o.crf, "-c:a", "aac", part)
-            shutil.move(part, out)
-            # how the clip is put together, so the board can cut a different teaser from it later
-            a, b = teaser_span(o.teaser, spike, length) if o.teaser > 0 else (0.0, 0.0)
-            game = stream_category(source)
-            out.with_suffix(".json").write_text(json.dumps({"game": game, "profile": args.profile or "",
-                "teaser": round(b - a, 3), "teaser_from": round(a, 3), "spike": round(spike, 3), "main": round(length, 3),
-                "intro": round(next((x[3] for x in extras if x[1] == "intro"), 0.0), 3)}), encoding="utf-8")
-            if o.captions != "off" and said:
-                shutil.move(srt, out.with_suffix(".srt"))
-                log(tag, f"saved {out} and {out.with_suffix('.srt').name}")
-            else:
-                log(tag, f"saved {out}")
-            if args.upload:
-                upload.publish(out, source, args.privacy, args.title, args.description, lambda text: log(tag, text),
-                               args.hashtags, game=game, profile=args.profile or "")
-        finally:
-            slot.close()
+        finish_clip(raw, out, source, args, o, tag, keep, start, duration, moment)
     except Exception as e:  # one bad clip must not take the channel down
         if not quitting:
             log(tag, f"clip {out.name} failed: {e}")
@@ -1017,6 +1069,23 @@ def make_clip(recorder, out, source, args, lag, noticed):
             backlog -= 1
         for leftover in RUN.glob(f"{out.stem}.*"):  # the cut, the part, the speech, the text files
             leftover.unlink(missing_ok=True)
+
+
+def start_clip(recorder, source, args, lag, now, why):
+    """Start cutting the clip of the moment `now`, unless too many are still being finished."""
+    global backlog
+    tag = recorder.tag
+    out = CLIPS / f"{tag}_{time.strftime('%Y%m%d_%H%M%S')}.mp4"
+    if backlog >= BACKLOG:
+        log(tag, f"{why}, skipped: {backlog} clips are still being finished (raise --jobs or use a smaller --model)")
+        return
+    # whether video of that moment exists is for the clip to find out: a recorder that stopped a second ago still holds it
+    log(tag, f"{why}, cutting {out.name}")
+    with shared:
+        backlog += 1
+    with recorder.lock:
+        recorder.pending += 1
+    threading.Thread(target=make_clip, args=(recorder, out, source, args, lag, now), name=f"clip {out.stem}").start()
 
 
 def watch(tag, channel, kick, minimum, args, index):
@@ -1041,6 +1110,9 @@ def watch(tag, channel, kick, minimum, args, index):
             now = time.time()
             if STOP.is_set():
                 break
+            if MANUAL.is_set():
+                MANUAL.clear()
+                start_clip(recorder, source, args, lag, now, "CLIP NOW")
             if now < bucket_end:
                 continue
             floor, factor = max(1, TUNE.get("min", minimum)), TUNE.get("factor", args.factor)
@@ -1055,20 +1127,7 @@ def watch(tag, channel, kick, minimum, args, index):
                 log(tag, f"{line} | Median: {usual:g} | Threshold: {max(floor, math.ceil(factor * usual))} | {video}")
                 if now - last_clip >= cooldown and is_spike(count, history, floor, factor):
                     last_clip = now
-                    out = CLIPS / f"{tag}_{time.strftime('%Y%m%d_%H%M%S')}.mp4"
-                    if backlog >= BACKLOG:
-                        log(tag, f"SPIKE: {count} msgs, skipped: {backlog} clips are still being finished "
-                                 "(raise --jobs or use a smaller --model)")
-                    else:
-                        # whether video of that moment exists is for the clip to find out: a recorder that
-                        # stopped a second ago still holds it
-                        log(tag, f"SPIKE: {count} msgs (median {usual:g}), cutting {out.name}")
-                        with shared:
-                            backlog += 1
-                        with recorder.lock:
-                            recorder.pending += 1
-                        threading.Thread(target=make_clip, args=(recorder, out, source, args, lag, now),
-                                         name=f"clip {out.stem}").start()
+                    start_clip(recorder, source, args, lag, now, f"SPIKE: {count} msgs (median {usual:g})")
             if not blind:
                 history.append(count)
                 seen += 1
@@ -1218,9 +1277,10 @@ def build_parser():
                       help="clip size in pixels, the longer side; the other side follows from the aspect ratio")
     clip.add_argument("--crf", type=int, default=23,
                       help="picture quality from 0 to 51; lower looks better and makes bigger files")
-    clip.add_argument("--cam", default="top", choices=["top", "bottom", "off", "over"],
+    clip.add_argument("--cam", default="top", choices=["top", "bottom", "off", "over", "faces", "fit"],
                       help="where the streamer's cam goes: a panel above or below the game, over the game in a corner, "
-                           "or off for one picture")
+                           "off for one picture, faces for one panel per person (podcasts), or fit for the whole "
+                           "picture over its own blur")
     clip.add_argument("--cam-corner", default="tr", choices=["tl", "tr", "bl", "br"],
                       help="corner of the clip the cam sits in when it is over the game")
     clip.add_argument("--cam-size", type=cam_size, default=0.34,
@@ -1265,6 +1325,9 @@ def build_parser():
     own.add_argument("--chat-box", default="left", choices=["left", "right", "off"],
                      help="the real chat of the moment scrolling in a box on that side of the clip")
     own.add_argument("--chat-lines", type=int, default=7, help="how many chat lines the box shows at once")
+    for flag, kind in (("--from-file", str), ("--start", float), ("--end", float), ("--peak", float), ("--name", str),
+                       ("--source", str)):
+        p.add_argument(flag, type=kind, help=argparse.SUPPRESS)  # podcast clips: the board runs this once per clip
     yt = p.add_argument_group("YouTube")
     yt.add_argument("--upload", action="store_true",
                     help="terminal runs only: upload every clip without review; the board waits for your Upload")
@@ -1279,6 +1342,54 @@ def build_parser():
     yt.add_argument("--description", default=upload.DESCRIPTION,
                     help="description of the upload; same placeholders as the title")
     return p
+
+
+def from_file(p, args):
+    """Cut one clip out of a video file, from --start to --end seconds, with the moment that matters at --peak."""
+    path = Path(args.from_file)
+    if not path.is_file():
+        p.error(f"no file {path}")
+    if args.start is None or args.end is None or not 0 <= args.start < args.end:
+        p.error("--start and --end are seconds, and --end must come after --start")
+    for tool in ("ffmpeg", "ffprobe"):
+        if not shutil.which(tool):
+            p.error(f"{tool} was not found; install ffmpeg and make sure it is on PATH")
+    shape(args)
+    for kind in ("logo", "intro", "outro"):
+        if getattr(args, kind) and not Path(getattr(args, kind)).is_file():
+            p.error(f"--{kind}: no file {getattr(args, kind)}")
+    sys.stdout.reconfigure(errors="replace")
+    if args.upload:
+        upload.youtube(args.profile or "")
+    name = (args.name or path.stem).strip()
+    source = re.sub(r"^https?://(www\.)?", "", args.source or "").strip() or f"podcast/{path.stem}"
+    stem = re.sub(r"[^A-Za-z0-9]+", "-", name).strip("-")[:40] or "podcast"
+    out = CLIPS / f"{stem}_{time.strftime('%Y%m%d_%H%M%S')}.mp4"
+    length = args.end - args.start
+    peak = args.start + length / 2 if args.peak is None else min(max(args.peak, args.start), args.end)
+    held, _ = claim_run_folder()
+    try:
+        face_model()
+    except OSError as e:
+        log("podcast", f"the face detector could not be fetched ({e}); clips get a plain centre crop for now")
+    failed = False
+    try:
+        raw = RUN / f"{out.stem}.cut.mp4"
+        # re-encoded, so it starts exactly where asked and not on the keyframe before it
+        ffmpeg("-ss", args.start, "-i", path, "-t", length, "-c:v", "libx264", "-preset", "veryfast", "-crf", 16,
+               "-c:a", "aac", raw)
+        finish_clip(raw, out, source, args, clip_options(args), "podcast", length, 0.0, length, peak - args.start,
+                    name, True)
+        print(f"RESULT {out}", flush=True)
+    except Exception as e:
+        log("podcast", f"clip {out.name} failed: {e}")
+        failed = True
+    finally:
+        for leftover in RUN.glob(f"{out.stem}.*"):
+            leftover.unlink(missing_ok=True)
+        held.close()
+        shutil.rmtree(RUN, ignore_errors=True)
+    sys.exit(1 if failed else 0)
 
 
 def claim_run_folder():
@@ -1326,8 +1437,8 @@ def grab_frames():
 def control():
     """Commands from the settings page, one per line on stdin.
 
-    stop, quit, min=<n>, factor=<x>, ratio=<w:h>, cam=<x,y,w,h or auto>, game=<x,y,w,h or auto>, share=<0.12-0.6 or
-    auto>, mode=<top|bottom|off|over>, corner=<tl|tr|bl|br>, camsize=<0.15-0.6>, and frame (a still of each channel).
+    stop, quit, clip (cut a clip now), min=<n>, factor=<x>, ratio=<w:h>, cam=<x,y,w,h or auto>, game=<x,y,w,h or auto>, share=<0.12-0.6 or
+    auto>, mode=<top|bottom|off|over|faces|fit>, corner=<tl|tr|bl|br>, camsize=<0.15-0.6>, and frame (a still of each channel).
 
     Losing stdin means the page is gone, which also stops us.
     """
@@ -1339,6 +1450,8 @@ def control():
             STOP.set()  # and keep listening: "quit" may follow
         elif key == "frame":
             threading.Thread(target=grab_frames, daemon=True).start()
+        elif key == "clip":
+            MANUAL.set()
         try:
             if key in ("min", "factor"):
                 TUNE[key] = int(value) if key == "min" else float(value)
@@ -1350,7 +1463,7 @@ def control():
                 TUNE["game_box"] = box(value)
             elif key == "share":
                 TUNE["cam_share"] = share(value)
-            elif key == "mode" and value in ("top", "bottom", "off", "over"):
+            elif key == "mode" and value in ("top", "bottom", "off", "over", "faces", "fit"):
                 TUNE["cam"] = value
             elif key == "corner" and value in ("tl", "tr", "bl", "br"):
                 TUNE["cam_corner"] = value
@@ -1367,6 +1480,8 @@ def main():
     if chosen.profile:
         p.set_defaults(**profile_defaults(p, chosen.profile))  # what is typed on the command line still wins
     args = p.parse_intermixed_args()
+    if args.from_file:
+        from_file(p, args)
     parsed = [parse_target(text) for text in args.channels]
     if None in parsed:
         p.error("every channel must be a channel name or a twitch.tv / kick.com link, optionally with :<minimum>")
