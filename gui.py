@@ -75,6 +75,8 @@ HISTORY = 60  # chat counts kept per stream for its chart
 LIMIT = 16  # streams on the board at most
 # a row carries its own minimum, multiplier and site; in the shared settings these only preset new rows
 PER_STREAM = ("--min", "--factor", "--kick")
+# YouTube drops a thumbnail set while it is still processing a Short; it is sent again after these many seconds
+RESEND = (150, 900)
 ON_THE_PAGE = ("--category", "--top", "--cam-box", "--game-box", "--cam-share", "--profile")  # their own screens
 # a channel profile: its own name, tag, intro and so on, and its own YouTube sign-in, in profiles/<id>/
 PROFILE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
@@ -721,6 +723,9 @@ class Board:
                 for path in (clip, clip.with_suffix(".srt"), clip.with_suffix(".json"), picture):
                     if path.exists():
                         os.replace(path, CLIPS / "uploaded" / path.name)
+                if picture.name and (CLIPS / "uploaded" / picture.name).is_file():
+                    threading.Thread(target=self.resend_thumbnail, args=(name, video, CLIPS / "uploaded" / picture.name, profile),
+                                     daemon=True).start()
             except (Exception, SystemExit) as e:  # a refused upload must reach the page, not end the server
                 result = {"state": "failed", "error": str(e)[:300]}
                 note = f"[review] upload of {name} failed: {e}"
@@ -730,6 +735,19 @@ class Board:
                 self.say(note)
 
         threading.Thread(target=send, daemon=True).start()
+
+    def resend_thumbnail(self, name, video, picture, profile):
+        """Send the thumbnail again once YouTube has finished processing the Short, which is when a thumbnail set at
+        upload time is otherwise dropped on the Shorts tab."""
+        for wait in RESEND:
+            time.sleep(wait)
+            try:
+                outcome = upload.set_thumbnail(video, picture, profile=profile)
+            except (Exception, SystemExit) as e:
+                outcome = f"thumbnail not sent again: {e}"
+            if outcome != "thumbnail set":
+                with self.lock:
+                    self.say(f"[review] {name}: {outcome}")
 
     def first_thumbnail(self, name, keep_own=True):
         """The default thumbnail: the teaser's first frame (or the spike without a teaser), with the first words said.

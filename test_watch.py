@@ -1309,9 +1309,19 @@ with tempfile.TemporaryDirectory() as folder:
             watcher.run = real_run
         assert grabbed[0][grabbed[0].index("-ss") + 1] == "21.500" and "drawtext" in " ".join(grabbed[0])
         assert ask("/api/thumb?name=xqc_20261120_120000.mp4") == (200, b"jpg")
+        again = []
+        real_set, real_resend = upload.set_thumbnail, gui.RESEND
+        upload.set_thumbnail = lambda video, picture, http=None, profile="": again.append((video, Path(picture).name)) or "thumbnail set"
+        gui.RESEND = (0.05, 0.1)
         assert ask("/api/review/upload", {"name": "xqc_20261120_120000.mp4", "title": "{x} my title",
                                           "description": "words", "privacy": "unlisted",
                                           "tags": "#xqc #gta6"})[0] == 200
+        waited_until = time.time() + 5
+        while len(again) < 2:
+            assert time.time() < waited_until, "the thumbnail is sent again after upload"
+            time.sleep(0.02)
+        assert again == [("abc123", "xqc_20261120_120000.jpg")] * 2, again
+        upload.set_thumbnail, gui.RESEND = real_set, real_resend
         deadline = time.time() + 3
         while board.reviewed.get("xqc_20261120_120000.mp4", {}).get("state") != "uploaded":
             assert time.time() < deadline
